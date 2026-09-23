@@ -8,6 +8,12 @@ Auto-cleanup:
       • files in `uploads/`  older than 30 minutes
     Old preview sessions held in memory are also removed.
 
+Authentication:
+    If the PYPDF_USER and PYPDF_PASS environment variables are set, the
+    entire app is protected by HTTP Basic Authentication. If they are
+    unset, authentication is disabled (convenient for local development,
+    dangerous in public hosting — always set them on Render).
+
 Works both locally (Waitress) and in production (Gunicorn on Render).
 """
 import io
@@ -17,9 +23,12 @@ import uuid
 import shutil
 import threading
 import traceback
+from functools import wraps
 from pathlib import Path
 
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import (
+    Flask, Response, render_template, request, send_file, jsonify,
+)
 
 from handlers import TOOLS, HANDLERS, get_tool
 from core.utils import OUTPUT_DIR
@@ -42,6 +51,45 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
 
 
 # ============================================================
+# Basic Authentication
+# ============================================================
+# Values are read from the environment.
+# On Render: set PYPDF_USER and PYPDF_PASS in the Environment tab.
+# Locally:   export PYPDF_USER=... ; export PYPDF_PASS=...
+#
+# If either is empty, authentication is DISABLED. That's fine for
+# local use but you should always set them on the public server.
+AUTH_USER = os.environ.get("PYPDF_USER", "").strip()
+AUTH_PASS = os.environ.get("PYPDF_PASS", "").strip()
+AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
+
+
+def _check_auth(username: str, password: str) -> bool:
+    return username == AUTH_USER and password == AUTH_PASS
+
+
+def _authenticate() -> Response:
+    return Response(
+        "Authentication required to use PyPDF Studio.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="PyPDF Studio"'},
+    )
+
+
+def requires_auth(f):
+    """Decorator that enforces Basic Auth when AUTH_ENABLED is True."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not AUTH_ENABLED:
+            return f(*args, **kwargs)
+        auth = request.authorization
+        if not auth or not _check_auth(auth.username, auth.password):
+            return _authenticate()
+        return f(*args, **kwargs)
+    return wrapper
+
+
+# ============================================================
 # Cleanup settings
 # ============================================================
 CLEANUP_INTERVAL_SECONDS = 30 * 60    # run every 30 minutes
@@ -60,10 +108,7 @@ PREVIEW_LOCK = threading.Lock()
 # Auto-cleanup thread
 # ============================================================
 def _delete_old_files(folder: Path, max_age_seconds: int):
-    """Delete files (recursively) in `folder` older than max_age_seconds.
-
-    Empty subdirectories are also removed.
-    """
+    """Delete files (recursively) in `folder` older than max_age_seconds."""
     if not folder.exists():
         return 0, 0
 
@@ -71,7 +116,6 @@ def _delete_old_files(folder: Path, max_age_seconds: int):
     deleted_files = 0
     deleted_dirs  = 0
 
-    # Files first
     for path in folder.rglob("*"):
         try:
             if path.is_file():
@@ -82,7 +126,6 @@ def _delete_old_files(folder: Path, max_age_seconds: int):
         except Exception:
             continue
 
-    # Then empty directories (bottom-up)
     for path in sorted(folder.rglob("*"), key=lambda p: len(p.parts), reverse=True):
         try:
             if path.is_dir() and not any(path.iterdir()):
@@ -111,7 +154,6 @@ def _cleanup_preview_sessions():
 
 def cleanup_loop():
     """Background thread: run cleanup every 30 minutes."""
-    # Small startup delay so the first cleanup doesn't fire immediately
     time.sleep(5)
 
     while True:
@@ -130,7 +172,6 @@ def cleanup_loop():
         except Exception:
             traceback.print_exc()
 
-        # Sleep until next run
         time.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
@@ -141,9 +182,9 @@ def start_cleanup_thread():
 
 
 # Start the cleanup thread at import time so it runs under Gunicorn too.
-# Gunicorn does NOT execute the `if __name__ == "__main__":` block, so this
-# module-level call is the only way the cleanup thread gets started in
-# production.
+# Gunicorn does NOT execute the `if __name__ == "__main__":` block,
+# so this module-level call is the only way the cleanup thread starts
+# in production.
 start_cleanup_thread()
 
 
@@ -175,9 +216,23 @@ def _check_python_modules():
 
 
 # ============================================================
+# Health check — intentionally NOT protected by auth
+# ============================================================
+@app.route("/health")
+def health():
+    """Lightweight status endpoint for Render and uptime monitors.
+
+    Kept unauthenticated so Render can verify the app is alive even
+    when Basic Auth is enabled.
+    """
+    return jsonify({"status": "ok", "service": "pypdf-studio"}), 200
+
+
+# ============================================================
 # Pages
 # ============================================================
 @app.route("/")
+@requires_auth
 def index():
     categories, seen = [], set()
     for t in TOOLS:
@@ -188,6 +243,7 @@ def index():
 
 
 @app.route("/tool/<tool_id>")
+@requires_auth
 def tool_page(tool_id):
     tool = get_tool(tool_id)
     if not tool:
@@ -196,6 +252,7 @@ def tool_page(tool_id):
 
 
 @app.route("/status")
+@requires_auth
 def status_page():
     return render_template("status.html",
                            binaries=_check_binaries(),
@@ -204,16 +261,11 @@ def status_page():
                            writers=sorted(set(WRITERS.keys())))
 
 
-@app.route("/health")
-def health():
-    """Lightweight health-check endpoint (used by Render / uptime monitors)."""
-    return jsonify({"status": "ok", "service": "pypdf-studio"}), 200
-
-
 # ============================================================
 # Preview endpoints
 # ============================================================
 @app.route("/api/preview/start/<tool_id>", methods=["POST"])
+@requires_auth
 def api_preview_start(tool_id):
     tool = get_tool(tool_id)
     if not tool or not tool.get("preview"):
@@ -234,7 +286,6 @@ def api_preview_start(tool_id):
     if pdf_file is None:
         return jsonify({"error": "Preview requires a PDF file."}), 400
 
-    # Drop any expired sessions before starting a new one
     _cleanup_preview_sessions()
 
     session_id = uuid.uuid4().hex[:12]
@@ -289,6 +340,7 @@ def api_preview_start(tool_id):
 
 
 @app.route("/api/preview/thumb/<session_id>/<int:page_num>")
+@requires_auth
 def api_preview_thumb(session_id, page_num):
     info = PREVIEW_SESSIONS.get(session_id)
     if not info:
@@ -300,6 +352,7 @@ def api_preview_thumb(session_id, page_num):
 
 
 @app.route("/api/preview/page/<session_id>/<int:page_num>")
+@requires_auth
 def api_preview_page(session_id, page_num):
     info = PREVIEW_SESSIONS.get(session_id)
     if not info:
@@ -319,6 +372,7 @@ def api_preview_page(session_id, page_num):
 
 
 @app.route("/api/preview/secondary/<session_id>")
+@requires_auth
 def api_preview_secondary(session_id):
     info = PREVIEW_SESSIONS.get(session_id)
     if not info or not info.get("second"):
@@ -330,6 +384,7 @@ def api_preview_secondary(session_id):
 # Conversion API
 # ============================================================
 @app.route("/api/run/<tool_id>", methods=["POST"])
+@requires_auth
 def api_run(tool_id):
     tool = get_tool(tool_id)
     if not tool:
@@ -401,6 +456,7 @@ def api_run(tool_id):
 
 
 @app.route("/api/download/<path:filename>")
+@requires_auth
 def download(filename):
     safe = Path(filename).name
     p = OUTPUT_DIR / safe
@@ -420,7 +476,7 @@ def internal_error(_):
 
 
 # ============================================================
-# Entry point
+# Entry point (local development only)
 # ============================================================
 if __name__ == "__main__":
     from waitress import serve
@@ -432,10 +488,11 @@ if __name__ == "__main__":
     print(f"  Open:    http://127.0.0.1:{port}")
     print(f"  Status:  http://127.0.0.1:{port}/status")
     print(f"  Health:  http://127.0.0.1:{port}/health")
+    print(f"  Auth:    {'ENABLED' if AUTH_ENABLED else 'disabled (no env vars set)'}")
     print("  Cleanup: every 30 minutes (output/ and uploads/)")
     print("=" * 60)
 
-    # NOTE: cleanup thread was already started at module level.
-    # Do NOT call start_cleanup_thread() here — that would start
-    # a second thread and cause duplicate delete operations.
+    # NOTE: the cleanup thread was already started at module level.
+    # Do NOT call start_cleanup_thread() here — that would start a
+    # second thread and cause duplicate delete operations.
     serve(app, host="0.0.0.0", port=port, threads=8, channel_timeout=300)
