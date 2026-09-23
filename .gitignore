@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data (should never go to GitHub)
+output/
+uploads/
+temp/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
