@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>System status — PyPDF Studio</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="brand">
+        <div class="brand-mark">P</div>
+        <div class="brand-text">
+          <span class="brand-name">PyPDF Studio</span>
+          <span class="brand-sub">System status</span>
+        </div>
+      </a>
+      <div class="topbar-right">
+        <a href="/" class="btn btn-ghost">← All tools</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tool-main">
+    <div class="tool-panel">
+      <div class="tool-panel-head">
+        <h1>System status</h1>
+        <p>What's installed and what's missing on this machine.</p>
+      </div>
+
+      <h2 class="section-title">External binaries</h2>
+      <table class="status-table">
+        <thead><tr><th>Tool</th><th>Status</th><th>Needed by</th></tr></thead>
+        <tbody>
+          {% for name, ok in binaries.items() %}
+          <tr>
+            <td>{{ name }}</td>
+            <td>
+              {% if ok %}<span class="pill ok">Installed</span>
+              {% else %}<span class="pill warn">Missing</span>{% endif %}
+            </td>
+            <td>
+              {% if name == 'tesseract' %}PDF OCR
+              {% elif name == 'ffmpeg' %}Media merging (optional)
+              {% elif name == 'libreoffice' %}Office → PDF (optional)
+              {% elif name == 'ghostscript' %}PDF → PDF/A (optional)
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h2 class="section-title" style="margin-top: 28px;">Python modules</h2>
+      <div class="chip-grid">
+        {% for mod, ok in modules.items() %}
+          <span class="mod-chip {% if ok %}ok{% else %}warn{% endif %}">
+            {{ mod }}
+          </span>
+        {% endfor %}
+      </div>
+
+      <h2 class="section-title" style="margin-top: 28px;">Readers (input formats)</h2>
+      <div class="chip-grid">
+        {% for ext in readers %}
+          <span class="mod-chip ok">{{ ext }}</span>
+        {% endfor %}
+      </div>
+
+      <h2 class="section-title" style="margin-top: 28px;">Writers (output formats)</h2>
+      <div class="chip-grid">
+        {% for ext in writers %}
+          <span class="mod-chip ok">.{{ ext }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>PyPDF Studio · <a href="/status">refresh</a></p>
+  </footer>
+
+  <style>
+    .status-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .status-table th, .status-table td {
+      text-align: left; padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-table th {
+      font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--muted);
+    }
+    .pill {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 999px; font-size: 11px; font-weight: 600;
+    }
+    .pill.ok   { background: #f0fff4; color: var(--success); }
+    .pill.warn { background: #fffaf0; color: var(--warning); }
+    .chip-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .mod-chip {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px; padding: 3px 9px; border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .mod-chip.ok   { background: #f0fff4; color: var(--success); border-color: #c6f6d5; }
+    .mod-chip.warn { background: #fffaf0; color: var(--warning); border-color: #fefcbf; }
+  </style>
+</body>
+</html>
