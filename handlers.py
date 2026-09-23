@@ -1,11 +1,11 @@
-"""Non-interactive tool handlers for the web GUI — v6.8.
+"""Non-interactive tool handlers for the web GUI — v6.9.
 
 Changes in this version:
-- PDF → Images: single-page PDFs now return the image directly instead of
-  a ZIP. Multi-page PDFs still return a ZIP.
-- Extract Images: if only one image is found, return it directly instead
-  of a ZIP.
-- Everything else unchanged from v6.7.
+- PDF → XLSX now preserves cell background colors and text colors by
+  sampling pixels from the rendered PDF page and inspecting text spans.
+- Falls back to the previous CSV-based approach if no tables are detected
+  or if color extraction fails for any reason.
+- Everything else unchanged from v6.8.
 """
 import io
 import os
@@ -16,6 +16,7 @@ import uuid
 import zipfile
 import shutil
 import tempfile
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -496,7 +497,7 @@ def _ocr_pdf_to_text(pdf_path: Path, out_path: Path, lang: str = "eng"):
 
 
 # ============================================================
-# PDF → CSV / TSV
+# PDF table extraction (text only — used by CSV / TSV)
 # ============================================================
 def _pdf_extract_tables(pdf_path: Path):
     fitz = _fitz()
@@ -510,10 +511,8 @@ def _pdf_extract_tables(pdf_path: Path):
             finder = page.find_tables()
         except Exception:
             finder = None
-
         if finder is None:
             continue
-
         try:
             for tbl in finder.tables:
                 data = tbl.extract()
@@ -551,7 +550,7 @@ def _pdf_to_tabular(pdf_path: Path, out_path: Path, delimiter: str = ","):
 
 
 # ============================================================
-# CSV → XLSX
+# Cell value coercion
 # ============================================================
 def _coerce_cell_value(v):
     if v is None:
@@ -584,6 +583,9 @@ def _coerce_cell_value(v):
         return s
 
 
+# ============================================================
+# CSV → XLSX (used as a fallback)
+# ============================================================
 def _csv_to_xlsx(csv_path: Path, out_path: Path):
     from openpyxl import Workbook
 
@@ -600,7 +602,243 @@ def _csv_to_xlsx(csv_path: Path, out_path: Path):
     wb.save(str(out_path))
 
 
+# ============================================================
+# PDF → XLSX with color preservation
+# ============================================================
+def _sample_cell_background(pix, page_rect, bbox, scale, offset=4):
+    """Sample a cell's background color from the rendered page image.
+
+    Samples the four corners a few pixels inward — this avoids both the
+    border line at the edge and the text in the middle of the cell.
+    Returns an uppercase RRGGBB hex string, or None if the color is white.
+    """
+    try:
+        x0, y0, x1, y1 = bbox
+    except Exception:
+        return None
+
+    # Convert PDF points → pixel coordinates
+    px0 = int((x0 - page_rect.x0) * scale)
+    py0 = int((y0 - page_rect.y0) * scale)
+    px1 = int((x1 - page_rect.x0) * scale)
+    py1 = int((y1 - page_rect.y0) * scale)
+
+    # Guard against tiny cells
+    if px1 - px0 < 2 * offset + 1 or py1 - py0 < 2 * offset + 1:
+        offset = max(1, offset // 2)
+
+    corners = [
+        (px0 + offset, py0 + offset),
+        (px1 - offset, py0 + offset),
+        (px0 + offset, py1 - offset),
+        (px1 - offset, py1 - offset),
+    ]
+
+    samples = []
+    for x, y in corners:
+        if 0 <= x < pix.width and 0 <= y < pix.height:
+            try:
+                rgb = pix.pixel(x, y)
+                samples.append(tuple(rgb[:3]))
+            except Exception:
+                continue
+
+    if not samples:
+        return None
+
+    rgb, _ = Counter(samples).most_common(1)[0]
+
+    # Skip white / near-white (default background — no need to style)
+    if all(c >= 250 for c in rgb):
+        return None
+
+    return f"{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"
+
+
+def _find_text_color(page, cell_bbox):
+    """Find the dominant non-black, non-white text color in a cell."""
+    try:
+        fitz = _fitz()
+        clip = fitz.Rect(cell_bbox)
+        text_dict = page.get_text("dict", clip=clip)
+    except Exception:
+        return None
+
+    colors = []
+    for block in text_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                color_int = span.get("color", 0)
+                if not isinstance(color_int, int):
+                    continue
+                r = (color_int >> 16) & 0xFF
+                g = (color_int >> 8) & 0xFF
+                b = color_int & 0xFF
+                # Skip black (default)
+                if r < 30 and g < 30 and b < 30:
+                    continue
+                # Skip white (probably not visible text)
+                if r > 240 and g > 240 and b > 240:
+                    continue
+                colors.append(f"{r:02X}{g:02X}{b:02X}")
+
+    if not colors:
+        return None
+    return Counter(colors).most_common(1)[0][0]
+
+
+def _get_cell_bboxes(table):
+    """Return a 2D list of cell bboxes for a PyMuPDF Table object."""
+    # Modern API: table.rows[i].cells[j]
+    try:
+        result = []
+        for row in table.rows:
+            row_boxes = []
+            for cell in row.cells:
+                if hasattr(cell, "bbox"):
+                    row_boxes.append(cell.bbox)
+                else:
+                    row_boxes.append(cell)
+            result.append(row_boxes)
+        if result and any(any(r) for r in result):
+            return result
+    except Exception:
+        pass
+
+    # Older API: flat .cells + row_count / col_count
+    try:
+        flat = list(table.cells)
+        rows = getattr(table, "row_count", None)
+        cols = getattr(table, "col_count", None)
+        if rows and cols:
+            result = []
+            idx = 0
+            for _ in range(rows):
+                row_boxes = []
+                for _ in range(cols):
+                    row_boxes.append(flat[idx] if idx < len(flat) else None)
+                    idx += 1
+                result.append(row_boxes)
+            return result
+    except Exception:
+        pass
+
+    return []
+
+
+def _pdf_to_xlsx_with_colors(pdf_path: Path, out_path: Path) -> bool:
+    """PDF → XLSX with cell colors preserved.
+
+    Returns True if at least one table was found and written.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font
+
+    fitz = _fitz()
+    doc = fitz.open(str(pdf_path))
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+
+    current_row = 1
+    table_found = False
+    first_table = True
+
+    for page in doc:
+        try:
+            finder = page.find_tables()
+        except Exception:
+            finder = None
+        if finder is None:
+            continue
+
+        # Render the page once for pixel sampling
+        try:
+            pix = page.get_pixmap(dpi=150)
+            page_rect = page.rect
+            scale = pix.width / page_rect.width if page_rect.width else 1.0
+        except Exception:
+            pix = None
+            page_rect = None
+            scale = 1.0
+
+        for tbl in finder.tables:
+            try:
+                data = tbl.extract()
+            except Exception:
+                continue
+            if not data:
+                continue
+
+            table_found = True
+            cell_bboxes = _get_cell_bboxes(tbl)
+
+            if not first_table:
+                current_row += 1  # blank separator row between tables
+
+            for r_idx, row_data in enumerate(data):
+                for c_idx, val in enumerate(row_data):
+                    cell = ws.cell(row=current_row + r_idx, column=c_idx + 1)
+                    cell.value = _coerce_cell_value(val)
+
+                    bg_color = None
+                    text_color = None
+
+                    if (cell_bboxes
+                            and r_idx < len(cell_bboxes)
+                            and c_idx < len(cell_bboxes[r_idx])):
+                        bbox = cell_bboxes[r_idx][c_idx]
+                        if bbox is not None and pix is not None and page_rect is not None:
+                            try:
+                                bg_color = _sample_cell_background(
+                                    pix, page_rect, bbox, scale
+                                )
+                            except Exception:
+                                bg_color = None
+                            try:
+                                text_color = _find_text_color(page, bbox)
+                            except Exception:
+                                text_color = None
+
+                    if bg_color:
+                        cell.fill = PatternFill(
+                            start_color=bg_color,
+                            end_color=bg_color,
+                            fill_type="solid",
+                        )
+
+                    is_header = (r_idx == 0)
+                    if is_header or text_color:
+                        cell.font = Font(bold=is_header, color=text_color)
+
+            current_row += len(data)
+            first_table = False
+
+    doc.close()
+
+    if not table_found:
+        return False
+
+    wb.save(str(out_path))
+    return True
+
+
 def _pdf_to_xlsx(pdf_path: Path, out_path: Path):
+    """PDF → XLSX.
+
+    Tries color-preserving table extraction first. If no tables are
+    detected (or color extraction fails), falls back to the previous
+    CSV → XLSX workflow.
+    """
+    try:
+        if _pdf_to_xlsx_with_colors(pdf_path, out_path):
+            return
+    except Exception:
+        pass
+
+    # Fallback: CSV → XLSX
     with tempfile.TemporaryDirectory() as td:
         tmp_csv = Path(td) / "temp.csv"
         _pdf_to_tabular(pdf_path, tmp_csv, delimiter=",")
@@ -1058,7 +1296,6 @@ def handle_split(files, options, work):
     if not ranges:
         raise ValueError("Nothing to split.")
 
-    # Single-page result → return the PDF directly
     if len(ranges) == 1:
         a, b = ranges[0]
         w = PdfWriter()
@@ -1069,7 +1306,6 @@ def handle_split(files, options, work):
             w.write(fh)
         return out
 
-    # Multiple parts → ZIP
     out = _out(files[0].stem, "zip")
     with zipfile.ZipFile(out, "w") as zf:
         for idx, (a, b) in enumerate(ranges, 1):
@@ -1231,11 +1467,6 @@ def handle_webpage_to_pdf(files, options, work):
 # Convert from PDF
 # ============================================================
 def handle_pdf_to_images(files, options, work):
-    """Convert PDF pages to images.
-
-    Single-page PDF   → return the image directly.
-    Multi-page PDF    → return a ZIP of images.
-    """
     fitz = _fitz()
     fmt = (options.get("format") or "png").lower()
     ext = "jpg" if fmt == "jpg" else "png"
@@ -1243,7 +1474,6 @@ def handle_pdf_to_images(files, options, work):
     doc = fitz.open(files[0])
     page_count = len(doc)
 
-    # ---- Single page → return the image directly ----
     if page_count == 1:
         pix = doc[0].get_pixmap(dpi=150)
         out = _out(files[0].stem, ext)
@@ -1251,7 +1481,6 @@ def handle_pdf_to_images(files, options, work):
         doc.close()
         return out
 
-    # ---- Multiple pages → return a ZIP ----
     out = _out(files[0].stem, "zip")
     with zipfile.ZipFile(out, "w") as zf:
         for i, page in enumerate(doc):
@@ -1265,16 +1494,10 @@ def handle_pdf_to_images(files, options, work):
 
 
 def handle_extract_images(files, options, work):
-    """Extract embedded images from a PDF.
-
-    Single image   → return it directly.
-    Multiple       → return a ZIP.
-    """
     fitz = _fitz()
     doc = fitz.open(files[0])
 
-    # Collect every embedded image first
-    collected = []  # list of (name, bytes)
+    collected = []
     for pno in range(len(doc)):
         for idx, img in enumerate(doc.get_page_images(pno, full=True)):
             try:
@@ -1288,7 +1511,6 @@ def handle_extract_images(files, options, work):
     if not collected:
         raise ValueError("No embedded images found in this PDF.")
 
-    # ---- Single image → return it directly ----
     if len(collected) == 1:
         name, data = collected[0]
         emb_ext = Path(name).suffix.lstrip(".") or "png"
@@ -1296,7 +1518,6 @@ def handle_extract_images(files, options, work):
         out.write_bytes(data)
         return out
 
-    # ---- Multiple images → return a ZIP ----
     out = _out(files[0].stem, "zip")
     with zipfile.ZipFile(out, "w") as zf:
         for name, data in collected:
@@ -1690,27 +1911,32 @@ def handle_universal(files, options, work):
 
     ocr_lang = (options.get("ocr_lang") or "eng").strip() or "eng"
 
+    # Image → Image
     if src_ext in IMAGE_EXTS and target in IMAGE_OUTPUT_EXTS:
         out = _out(src.stem, target)
         img = _load_image_for_imaging(src)
         _save_image_as(img, target, out)
         return out
 
+    # Image → OCR PDF
     if src_ext in IMAGE_EXTS and target in ("ocr", "ocr-pdf"):
         out = _out(src.stem, "pdf")
         _ocr_image_to_searchable_pdf(src, out, lang=ocr_lang)
         return out
 
+    # Image → OCR text
     if src_ext in IMAGE_EXTS and target in ("ocr-txt", "ocr-text"):
         out = _out(src.stem, "txt")
         _ocr_image_to_text(src, out, lang=ocr_lang)
         return out
 
+    # Image → PDF
     if src_ext in IMAGE_EXTS and target == "pdf":
         out = _out(src.stem, "pdf")
         _image_to_pdf(src, out)
         return out
 
+    # XML ↔ JSON
     if src_ext == ".xml" and target == "json":
         out = _out(src.stem, "json")
         _xml_to_json(src, out)
@@ -1721,6 +1947,7 @@ def handle_universal(files, options, work):
         _json_to_xml(src, out)
         return out
 
+    # Office → Office / PDF
     if src_ext in OFFICE_EXTS and target in TARGET_EXT and src_ext != ".pdf":
         target_ext = TARGET_EXT[target]
         if not libreoffice.is_available():
@@ -1737,6 +1964,7 @@ def handle_universal(files, options, work):
         Path(converted).replace(out)
         return out
 
+    # PDF → various
     if src_ext == ".pdf":
         if target == "pdf":
             out = _out(src.stem, "pdf")
@@ -1817,6 +2045,7 @@ def handle_universal(files, options, work):
             _pdf_to_tabular(src, out, delimiter=delim)
             return out
 
+    # AST pipeline
     reader = get_reader(src_ext)
     if reader is None:
         raise ValueError(
@@ -2067,8 +2296,7 @@ TOOLS = [
      "multiple": False,
      "hint": ("Images: PDF · OCR · or another image format. "
               "Documents: Office/PDF/HTML/Markdown/XML/JSON. "
-              "Office ↔ Office and Office → PDF use LibreOffice. "
-              "PDF → CSV/TSV/XLSX uses table detection."),
+              "PDF → XLSX preserves cell background and text colors."),
      "options": [
          {
              "name": "format",
