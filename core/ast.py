@@ -1,25 +1,21 @@
-"""
-Universal Document AST for PyPDF Studio.
-
-Every reader converts its input format into this AST.
-Every writer renders this AST into its output format.
-This is what enables M×N (any-to-any) conversions with only M readers + N writers.
-"""
+"""Universal Document AST for PyPDF Studio."""
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 
-# ------------------------------------------------------------------
-# Base
-# ------------------------------------------------------------------
 class Node:
     """Base class for all AST nodes."""
     pass
 
 
-# ------------------------------------------------------------------
-# Block-level nodes
-# ------------------------------------------------------------------
+@dataclass
+class Run:
+    """Inline text with optional bold / italic formatting."""
+    text: str
+    bold: bool = False
+    italic: bool = False
+
+
 @dataclass
 class Document(Node):
     """Root node. Holds metadata + ordered list of children."""
@@ -31,11 +27,13 @@ class Document(Node):
 class Heading(Node):
     level: int
     text: str
+    runs: List[Run] = field(default_factory=list)
 
 
 @dataclass
 class Paragraph(Node):
     text: str
+    runs: List[Run] = field(default_factory=list)
 
 
 @dataclass
@@ -82,8 +80,5 @@ class Link(Node):
     url: str
 
 
-# ------------------------------------------------------------------
-# Helper: title from metadata
-# ------------------------------------------------------------------
 def get_title(ast: Document, fallback: str = "Untitled") -> str:
     return ast.metadata.get("title") or fallback
