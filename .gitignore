@@ -1,16 +1,35 @@
-# Python
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
 venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
 
-# Runtime data (should never go to GitHub)
+# ---------- Runtime data (should never go to GitHub) ----------
 output/
 uploads/
 temp/
 logs/
 *.log
 
-# OS
+# ---------- Flask / Flask session artifacts ----------
+instance/
+.flaskenv
+.env
+
+# ---------- IDE / editors ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---------- OS ----------
 .DS_Store
 Thumbs.db
+desktop.ini

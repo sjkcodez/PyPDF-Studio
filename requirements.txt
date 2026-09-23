@@ -2,32 +2,23 @@
 # PyPDF Studio — Python Dependencies
 # Install with:  pip install -r requirements.txt
 # ============================================================
-# Note: The following SYSTEM-LEVEL tools are also required and
+# NOTE: The following SYSTEM-LEVEL tools are also required and
 # must be installed separately (they are NOT pip packages):
 #
 #   • tesseract-ocr   → needed by the PDF OCR tool
-#     Ubuntu/Debian:  sudo apt install -y tesseract-ocr tesseract-ocr-swa
-#     Fedora:         sudo dnf install -y tesseract tesseract-langpack-swa
-#     macOS:          brew install tesseract tesseract-lang
-#     Windows:        https://github.com/UB-Mannheim/tesseract/wiki
-#
-#   • libreoffice     → needed by Office → PDF tools (Word, Excel, PPT, ODT)
-#     Ubuntu/Debian:  sudo apt install -y libreoffice
-#     Fedora:         sudo dnf install -y libreoffice
-#     macOS:          brew install --cask libreoffice
-#     Windows:        https://www.libreoffice.org/download/
-#
+#   • libreoffice     → needed by Office → PDF tools
 #   • ghostscript     → needed for advanced PDF compression
-#     Ubuntu/Debian:  sudo apt install -y ghostscript
-#     Fedora:         sudo dnf install -y ghostscript
-#     macOS:          brew install ghostscript
-#     Windows:        https://www.ghostscript.com/download/gsdnld.html
+#   • libheif / libraw → needed for HEIC and RAW image support
 #
-#   • libheif / libraw → needed for HEIC and RAW image support on Linux
-#     Ubuntu/Debian:  sudo apt install -y libheif-dev libraw-dev
-#     Fedora:         sudo dnf install -y libheif-devel LibRaw-devel
-#     macOS:          brew install libheif libraw
-#     Windows:        (bundled in pip wheels — no action needed)
+# On a VPS (Ubuntu/Debian):
+#   sudo apt install -y \
+#       tesseract-ocr tesseract-ocr-swa \
+#       libreoffice ghostscript \
+#       libheif-dev libraw-dev
+#
+# On Render: these are NOT available on the free tier. Features
+# that need them will show a friendly error until you migrate to
+# a Docker-based deployment.
 # ============================================================
 
 
@@ -64,6 +55,7 @@ pytesseract>=0.3.10
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+xmltodict>=0.13.0
 
 # ---------- Specialised formats ----------
 ezdxf>=1.3.0
@@ -76,11 +68,9 @@ vsdx>=0.5.19
 Flask>=3.0.0
 Werkzeug>=3.0.0
 
+# ---------- Production servers ----------
+gunicorn>=21.2.0
+waitress>=3.0.0
+
 # ---------- Optional (needed by pdf2docx on some systems) ----------
 opencv-python-headless>=4.8.0
-
-# ---------- Networking / parsing ----------
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
-xmltodict>=0.13.0

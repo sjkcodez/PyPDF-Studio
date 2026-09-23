@@ -7,8 +7,11 @@ Auto-cleanup:
       • files in `output/`   older than 30 minutes
       • files in `uploads/`  older than 30 minutes
     Old preview sessions held in memory are also removed.
+
+Works both locally (Waitress) and in production (Gunicorn on Render).
 """
 import io
+import os
 import time
 import uuid
 import shutil
@@ -45,8 +48,9 @@ CLEANUP_INTERVAL_SECONDS = 30 * 60    # run every 30 minutes
 CLEANUP_MAX_AGE_SECONDS  = 30 * 60    # delete files older than 30 minutes
 PREVIEW_MAX_AGE_SECONDS  = 60 * 60    # preview sessions expire after 1 hour
 
-#CLEANUP_INTERVAL_SECONDS = 30  # run every 30 seconds
-#CLEANUP_MAX_AGE_SECONDS  = 30  # delete files older than 30 seconds
+# ---- For fast local testing, uncomment the next two lines ----
+# CLEANUP_INTERVAL_SECONDS = 30
+# CLEANUP_MAX_AGE_SECONDS  = 30
 
 PREVIEW_SESSIONS = {}
 PREVIEW_LOCK = threading.Lock()
@@ -136,6 +140,13 @@ def start_cleanup_thread():
     return t
 
 
+# Start the cleanup thread at import time so it runs under Gunicorn too.
+# Gunicorn does NOT execute the `if __name__ == "__main__":` block, so this
+# module-level call is the only way the cleanup thread gets started in
+# production.
+start_cleanup_thread()
+
+
 # ============================================================
 # Diagnostics
 # ============================================================
@@ -191,6 +202,12 @@ def status_page():
                            modules=_check_python_modules(),
                            readers=sorted(READERS.keys()),
                            writers=sorted(set(WRITERS.keys())))
+
+
+@app.route("/health")
+def health():
+    """Lightweight health-check endpoint (used by Render / uptime monitors)."""
+    return jsonify({"status": "ok", "service": "pypdf-studio"}), 200
 
 
 # ============================================================
@@ -397,18 +414,28 @@ def too_large(_):
     return jsonify({"error": f"File too large. Max {MAX_MB} MB."}), 413
 
 
+@app.errorhandler(500)
+def internal_error(_):
+    return jsonify({"error": "Internal server error. Check the server logs."}), 500
+
+
 # ============================================================
 # Entry point
 # ============================================================
 if __name__ == "__main__":
+    from waitress import serve
+
+    port = int(os.environ.get("PORT", 5000))
+
     print("=" * 60)
     print("  PyPDF Studio — Web GUI")
-    print("  Open:    http://127.0.0.1:5000")
-    print("  Status:  http://127.0.0.1:5000/status")
+    print(f"  Open:    http://127.0.0.1:{port}")
+    print(f"  Status:  http://127.0.0.1:{port}/status")
+    print(f"  Health:  http://127.0.0.1:{port}/health")
     print("  Cleanup: every 30 minutes (output/ and uploads/)")
     print("=" * 60)
 
-    # Start the background cleanup thread
-    start_cleanup_thread()
-    #app.run(port=5000)  #This will allow us to access the app on 127.0.0.1:5000 only and not outside of it
-    app.run(host="0.0.0.0", port=5000, debug=False) #The app will be able to be accessible from the VM and outside the VM( any PC or phone)
+    # NOTE: cleanup thread was already started at module level.
+    # Do NOT call start_cleanup_thread() here — that would start
+    # a second thread and cause duplicate delete operations.
+    serve(app, host="0.0.0.0", port=port, threads=8, channel_timeout=300)
