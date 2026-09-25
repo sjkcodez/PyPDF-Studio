@@ -8,7 +8,7 @@ Tracks:
 All writes are best-effort: a failure here never breaks a conversion.
 
 Data lives in `logs/analytics.db`. On Render's free tier this file is
-erased when the container restarts — see the note in the README.
+erased when the container restarts.
 """
 import csv
 import io
@@ -127,7 +127,6 @@ def _detect_os(ua: str) -> str:
 
 def _detect_browser(ua: str) -> str:
     u = (ua or "").lower()
-    # Order matters — Edge/Opera contain "chrome", Chrome contains "safari"
     if "edg/" in u or "edgios" in u or "edga" in u:
         return "Edge"
     if "opr/" in u or "opera" in u:
@@ -387,6 +386,30 @@ def export_csv() -> str:
     finally:
         conn.close()
     return buf.getvalue()
+
+
+# ============================================================
+# Reset
+# ============================================================
+def reset_all():
+    """Delete all analytics data and reset auto-increment counters.
+
+    Wipes the three tables and resets their AUTOINCREMENT sequences so
+    that fresh IDs start at 1 again.
+    """
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.executescript("""
+                DELETE FROM visits;
+                DELETE FROM conversions;
+                DELETE FROM downloads;
+                DELETE FROM sqlite_sequence
+                    WHERE name IN ('visits', 'conversions', 'downloads');
+            """)
+            conn.commit()
+        finally:
+            conn.close()
 
 
 # Initialise the DB on first import

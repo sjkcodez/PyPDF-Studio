@@ -5,11 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin — PyPDF Studio</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("pypdf-theme") || "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
   <style>
     .admin-wrap { max-width: 1200px; margin: 0 auto; padding: 32px 24px 80px; }
     .admin-wrap h1 { color: var(--navy); font-size: 26px; margin-bottom: 6px; }
     .admin-wrap p.sub { color: var(--muted); margin-bottom: 28px; }
-    .toolbar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+    .toolbar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; align-items: center; }
     .range-btn {
       padding: 8px 16px; border-radius: 999px; border: 1px solid var(--border);
       background: var(--surface); color: var(--text-soft); font-size: 13px;
@@ -35,17 +45,166 @@
     th { color: var(--muted); font-size: 11px; text-transform: uppercase;
          letter-spacing: 0.05em; font-weight: 600; }
     td.num { text-align: right; font-variant-numeric: tabular-nums; }
-    .pill-ok   { background: #f0fff4; color: var(--success); padding: 2px 8px;
+    .pill-ok   { background: rgba(56,161,105,0.14); color: var(--success); padding: 2px 8px;
                  border-radius: 999px; font-size: 11px; font-weight: 600; }
-    .pill-fail { background: #fff5f5; color: var(--error); padding: 2px 8px;
+    .pill-fail { background: rgba(229,62,62,0.14); color: var(--error); padding: 2px 8px;
                  border-radius: 999px; font-size: 11px; font-weight: 600; }
     .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-    .bar-label { font-size: 12px; color: var(--text-soft); width: 100px;
-                 text-align: right; }
-    .bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 7px;
-                 overflow: hidden; }
+    .bar-label { font-size: 12px; color: var(--text-soft); width: 100px; text-align: right; }
+    .bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 7px; overflow: hidden; }
     .bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--teal)); }
     .bar-value { font-size: 12px; color: var(--muted); width: 50px; }
+
+    /* User badge + logout */
+    .admin-badge {
+      display: flex; align-items: center; gap: 10px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      font-size: 12.5px;
+      color: var(--topbar-text);
+    }
+    .admin-badge .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(63,185,80,0.6);
+    }
+    .logout-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: rgba(248,81,73,0.15);
+      border: 1px solid rgba(248,81,73,0.35);
+      color: #ff7b72;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: 0.15s;
+    }
+    .logout-btn:hover {
+      background: rgba(248,81,73,0.25);
+      border-color: rgba(248,81,73,0.55);
+    }
+
+    /* ---- Profile picture management ---- */
+    .avatar-manage {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 24px;
+      align-items: center;
+    }
+    @media (max-width: 600px) {
+      .avatar-manage { grid-template-columns: 1fr; text-align: center; }
+    }
+    .avatar-manage-preview {
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      border: 3px solid var(--border);
+      object-fit: cover;
+      background: var(--surface-2);
+      box-shadow: var(--shadow-md);
+      justify-self: center;
+    }
+    .avatar-manage-placeholder {
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--navy), var(--blue));
+      display: grid; place-items: center;
+      color: #fff; font-size: 44px; font-weight: 700;
+      box-shadow: var(--shadow-md);
+      justify-self: center;
+    }
+    .avatar-manage-info { min-width: 0; }
+    .avatar-manage-info h3 {
+      font-size: 15px;
+      color: var(--navy);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .avatar-manage-info p {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+    .avatar-manage-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .avatar-manage-actions input[type="file"] {
+      font-size: 12.5px;
+      color: var(--text-soft);
+      max-width: 240px;
+    }
+    .btn-sm {
+      padding: 8px 16px !important;
+      font-size: 13px !important;
+    }
+    .btn-danger {
+      background: rgba(229,62,62,0.1);
+      color: var(--error);
+      border: 1px solid rgba(229,62,62,0.3);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: 0.15s;
+    }
+    .btn-danger:hover {
+      background: rgba(229,62,62,0.2);
+      border-color: rgba(229,62,62,0.5);
+    }
+    .flash {
+      padding: 10px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .flash.success {
+      background: rgba(56,161,105,0.12);
+      color: var(--success);
+      border: 1px solid rgba(56,161,105,0.3);
+    }
+    .flash.error {
+      background: rgba(229,62,62,0.12);
+      color: var(--error);
+      border: 1px solid rgba(229,62,62,0.3);
+    }
+
+    /* ---- Danger zone ---- */
+    .danger-card {
+      border-color: rgba(229,62,62,0.35) !important;
+      background: linear-gradient(180deg, rgba(229,62,62,0.03), transparent) !important;
+    }
+    .danger-card h2 {
+      color: var(--error) !important;
+    }
+    .danger-flex {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+    .danger-flex-text { flex: 1; min-width: 250px; }
+    .danger-flex-text h3 {
+      font-size: 15px;
+      color: var(--navy);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .danger-flex-text p {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
   </style>
 </head>
 <body>
@@ -60,12 +219,25 @@
         </div>
       </a>
       <div class="topbar-right">
+        <div class="admin-badge">
+          <span class="dot"></span>
+          <span>{{ admin_user }}</span>
+        </div>
+        <button class="theme-toggle" title="Switch theme" type="button"></button>
         <a href="/" class="btn btn-ghost">← Back to app</a>
+        <a href="/mtawala/logout" class="logout-btn">Sign out</a>
       </div>
     </div>
   </header>
 
   <main class="admin-wrap">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+
     <h1>Analytics</h1>
     <p class="sub">Anonymous usage statistics. No file contents are tracked.</p>
 
@@ -74,10 +246,53 @@
       <a class="range-btn {% if stats.days == 7 %}active{% endif %}" href="?days=7">Last 7 days</a>
       <a class="range-btn {% if stats.days == 30 %}active{% endif %}" href="?days=30">Last 30 days</a>
       <a class="range-btn {% if stats.days == 0 %}active{% endif %}" href="?days=0">All time</a>
-      <a class="range-btn" href="/admin/export.csv" style="margin-left:auto;background:var(--navy);color:#fff;border-color:var(--navy);">⬇ Export CSV</a>
+      <a class="range-btn"
+         href="/mtawala/export.csv"
+         style="margin-left:auto;background:var(--navy);color:#fff;border-color:var(--navy);">
+        ⬇ Export CSV
+      </a>
     </div>
 
-    <!-- KPIs -->
+    <!-- ============ PROFILE PICTURE MANAGEMENT ============ -->
+    <div class="card" style="margin-bottom: 32px;">
+      <h2>Developer profile picture</h2>
+
+      <div class="avatar-manage">
+        <div>
+          {% if avatar_url %}
+            <img src="{{ avatar_url }}" alt="Profile" class="avatar-manage-preview" />
+          {% else %}
+            <div class="avatar-manage-placeholder">S</div>
+          {% endif %}
+        </div>
+
+        <div class="avatar-manage-info">
+          <h3>Current picture</h3>
+          <p>
+            This image appears on the <a href="/about" target="_blank"
+            style="color:var(--blue);font-weight:600;">About Developer</a> page
+            and in the footer of every page. PNG, JPG, WEBP, or GIF — max 5 MB.
+          </p>
+
+          <div class="avatar-manage-actions">
+            <form method="POST" action="/mtawala/avatar"
+                  enctype="multipart/form-data"
+                  style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+              <input type="file" name="avatar" accept="image/*" required />
+              <button type="submit" class="btn btn-primary btn-sm">Upload</button>
+            </form>
+
+            {% if avatar_url %}
+            <form method="POST" action="/mtawala/avatar/clear">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ KPIs ============ -->
     <div class="kpis">
       <div class="kpi">
         <div class="kpi-label">Site visits</div>
@@ -105,7 +320,7 @@
       </div>
     </div>
 
-    <!-- Daily visits chart -->
+    <!-- ============ DAILY CHART ============ -->
     <div class="card" style="margin-bottom: 32px;">
       <h2>Daily visits (last {{ stats.daily_visits|length }} days)</h2>
       {% if stats.daily_visits %}
@@ -124,9 +339,8 @@
       {% endif %}
     </div>
 
-    <!-- Two-column: Top tools + Devices -->
+    <!-- ============ TOOLS + DEVICES ============ -->
     <div class="grid2">
-
       <div class="card">
         <h2>Most-used tools</h2>
         {% if stats.top_tools %}
@@ -154,9 +368,7 @@
         <h2>Devices</h2>
         {% if stats.devices %}
         <table>
-          <thead>
-            <tr><th>Device</th><th class="num">Visits</th><th class="num">Share</th></tr>
-          </thead>
+          <thead><tr><th>Device</th><th class="num">Visits</th><th class="num">Share</th></tr></thead>
           <tbody>
             {% for d in stats.devices %}
             <tr>
@@ -176,29 +388,22 @@
         <table>
           <tbody>
             {% for b in stats.browsers %}
-            <tr>
-              <td>{{ b.name }}</td>
-              <td class="num">{{ b.count }}</td>
-              <td class="num">{{ "%.0f"|format(b.pct) }}%</td>
-            </tr>
+            <tr><td>{{ b.name }}</td><td class="num">{{ b.count }}</td><td class="num">{{ "%.0f"|format(b.pct) }}%</td></tr>
             {% endfor %}
           </tbody>
         </table>
         {% endif %}
       </div>
-
     </div>
 
-    <!-- Recent conversions -->
+    <!-- ============ RECENT CONVERSIONS ============ -->
     <div class="card" style="margin-bottom: 32px;">
       <h2>Recent conversions</h2>
       {% if stats.recent_conversions %}
       <table>
         <thead>
-          <tr>
-            <th>When</th><th>Tool</th><th>Input → Output</th>
-            <th class="num">Size</th><th class="num">Time</th><th>Status</th>
-          </tr>
+          <tr><th>When</th><th>Tool</th><th>Input → Output</th>
+              <th class="num">Size</th><th class="num">Time</th><th>Status</th></tr>
         </thead>
         <tbody>
           {% for c in stats.recent_conversions %}
@@ -206,16 +411,9 @@
             <td>{{ c.ts_str }}</td>
             <td>{{ c.tool_id }}</td>
             <td>{{ c.input_ext }} → {{ c.output_ext }}</td>
-            <td class="num">
-              {% if c.input_size %}
-                {{ (c.input_size / 1024)|round(0)|int }} KB
-              {% else %}—{% endif %}
-            </td>
+            <td class="num">{% if c.input_size %}{{ (c.input_size / 1024)|round(0)|int }} KB{% else %}—{% endif %}</td>
             <td class="num">{{ c.duration_ms }} ms</td>
-            <td>
-              {% if c.success %}<span class="pill-ok">OK</span>
-              {% else %}<span class="pill-fail">Failed</span>{% endif %}
-            </td>
+            <td>{% if c.success %}<span class="pill-ok">OK</span>{% else %}<span class="pill-fail">Failed</span>{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -225,14 +423,12 @@
       {% endif %}
     </div>
 
-    <!-- Recent downloads -->
-    <div class="card">
+    <!-- ============ RECENT DOWNLOADS ============ -->
+    <div class="card" style="margin-bottom: 32px;">
       <h2>Recent downloads</h2>
       {% if stats.recent_downloads %}
       <table>
-        <thead>
-          <tr><th>When</th><th>Filename</th></tr>
-        </thead>
+        <thead><tr><th>When</th><th>Filename</th></tr></thead>
         <tbody>
           {% for d in stats.recent_downloads %}
           <tr><td>{{ d.ts_str }}</td><td>{{ d.filename }}</td></tr>
@@ -244,7 +440,30 @@
       {% endif %}
     </div>
 
+    <!-- ============ DANGER ZONE — Reset analytics ============ -->
+    <div class="card danger-card">
+      <h2>⚠️ Danger zone</h2>
+      <div class="danger-flex">
+        <div class="danger-flex-text">
+          <h3>Reset all analytics</h3>
+          <p>
+            Permanently deletes every recorded visit, conversion, and download from the database.
+            The counters start from zero. <strong>This cannot be undone.</strong>
+            If you might need the history, use <strong>Export CSV</strong> first.
+          </p>
+        </div>
+
+        <form method="POST" action="/mtawala/analytics/reset"
+              onsubmit="return confirm('Delete ALL analytics data?\n\nThis cannot be undone. Consider exporting a CSV backup first.');">
+          <button type="submit" class="btn-danger" style="padding: 10px 20px; font-size: 13.5px;">
+            🗑 Reset all analytics
+          </button>
+        </form>
+      </div>
+    </div>
+
   </main>
 
+  <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </body>
 </html>

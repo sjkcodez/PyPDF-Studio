@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin login — PyPDF Studio</title>
+
+  <!--
+    This template is intentionally self-contained — all styles are inline
+    so the login page looks right regardless of style.css state.
+    Theme colors are read from the CSS variables defined in style.css
+    (with fallbacks for the light theme).
+  -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("pypdf-theme") || "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
+
+  <style>
+    /* ---------- Reset + page shell ---------- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                   Inter, system-ui, "Helvetica Neue", Arial, sans-serif;
+      color: #2d3748;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background:
+        radial-gradient(900px 500px at 15% 10%, rgba(86,212,221,0.10), transparent 60%),
+        radial-gradient(700px 400px at 85% 90%, rgba(240,168,104,0.08), transparent 60%),
+        #f5f7fa;
+    }
+
+    /* ---- Dark theme overrides ---- */
+    html[data-theme="dark"] body {
+      color: #e6edf3;
+      background:
+        radial-gradient(900px 500px at 15% 10%, rgba(86,212,221,0.06), transparent 60%),
+        radial-gradient(700px 400px at 85% 90%, rgba(240,168,104,0.05), transparent 60%),
+        #0d1117;
+    }
+
+    /* ---------- Card ---------- */
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 36px 32px;
+      box-shadow: 0 14px 32px rgba(30, 58, 95, 0.12);
+      position: relative;
+      overflow: hidden;
+      animation: loginFade 0.35s ease;
+    }
+
+    html[data-theme="dark"] .login-card {
+      background: #161b22;
+      border-color: #30363d;
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.6);
+    }
+
+    @keyframes loginFade {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .login-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #1e3a5f, #3182ce, #319795);
+    }
+
+    /* ---------- Brand ---------- */
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 26px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid #e2e8f0;
+      text-decoration: none;
+    }
+
+    html[data-theme="dark"] .login-brand {
+      border-bottom-color: #30363d;
+    }
+
+    .login-brand-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #56d4dd, #3182ce);
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 22px;
+      flex-shrink: 0;
+    }
+
+    .login-brand-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.15;
+    }
+
+    .login-brand-name {
+      font-size: 17px;
+      font-weight: 600;
+      color: #1e3a5f;
+    }
+
+    html[data-theme="dark"] .login-brand-name { color: #58a6ff; }
+
+    .login-brand-sub {
+      font-size: 11.5px;
+      color: #718096;
+      margin-top: 3px;
+    }
+
+    html[data-theme="dark"] .login-brand-sub { color: #8b949e; }
+
+    /* ---------- Headings ---------- */
+    .login-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1e3a5f;
+      margin: 0 0 4px 0;
+      letter-spacing: -0.01em;
+    }
+
+    html[data-theme="dark"] .login-title { color: #58a6ff; }
+
+    .login-sub {
+      font-size: 13.5px;
+      color: #718096;
+      margin: 0 0 22px 0;
+    }
+
+    html[data-theme="dark"] .login-sub { color: #8b949e; }
+
+    /* ---------- Form ---------- */
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .field { margin-bottom: 14px; }
+
+    .field-label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: #4a5568;
+      margin-bottom: 6px;
+    }
+
+    html[data-theme="dark"] .field-label { color: #c9d1d9; }
+
+    .input {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: #2d3748;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: 0.18s ease;
+    }
+
+    html[data-theme="dark"] .input {
+      background: #161b22;
+      border-color: #30363d;
+      color: #e6edf3;
+    }
+
+    .input:hover {
+      border-color: #cbd5e0;
+    }
+
+    html[data-theme="dark"] .input:hover {
+      border-color: #3d444d;
+    }
+
+    .input:focus {
+      border-color: #3182ce;
+      box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.12);
+    }
+
+    html[data-theme="dark"] .input:focus {
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 12px 20px;
+      margin-top: 12px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      background: #1e3a5f;
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: 0.18s ease;
+      box-shadow: 0 4px 12px rgba(30, 58, 95, 0.2);
+    }
+
+    html[data-theme="dark"] .btn-primary {
+      background: #1f6feb;
+      box-shadow: 0 4px 12px rgba(31, 111, 235, 0.3);
+    }
+
+    .btn-primary:hover {
+      background: #15294a;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(30, 58, 95, 0.28);
+    }
+
+    html[data-theme="dark"] .btn-primary:hover {
+      background: #388bfd;
+    }
+
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e0;
+      background: #ffffff;
+      color: #1e3a5f;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: 0.18s ease;
+      text-decoration: none;
+    }
+
+    html[data-theme="dark"] .btn-outline {
+      background: #161b22;
+      border-color: #30363d;
+      color: #58a6ff;
+    }
+
+    .btn-outline:hover {
+      border-color: #3182ce;
+      color: #3182ce;
+      background: #ebf4ff;
+    }
+
+    html[data-theme="dark"] .btn-outline:hover {
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    /* ---------- Footer ---------- */
+    .login-footer {
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+    }
+
+    html[data-theme="dark"] .login-footer {
+      border-top-color: #30363d;
+    }
+
+    .login-back {
+      font-size: 13px;
+      color: #718096;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+
+    html[data-theme="dark"] .login-back { color: #8b949e; }
+
+    .login-back:hover { color: #3182ce; }
+
+    html[data-theme="dark"] .login-back:hover { color: #58a6ff; }
+
+    /* ---------- Flash / error ---------- */
+    .flash {
+      padding: 10px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .flash.error {
+      background: rgba(229, 62, 62, 0.12);
+      color: #e53e3e;
+      border: 1px solid rgba(229, 62, 62, 0.3);
+    }
+
+    html[data-theme="dark"] .flash.error {
+      color: #f85149;
+    }
+
+    .flash.success {
+      background: rgba(56, 161, 105, 0.12);
+      color: #38a169;
+      border: 1px solid rgba(56, 161, 105, 0.3);
+    }
+
+    /* ---------- Disabled state ---------- */
+    .login-disabled {
+      text-align: center;
+      padding: 12px 0;
+    }
+
+    .login-disabled-icon {
+      font-size: 42px;
+      margin-bottom: 16px;
+      opacity: 0.65;
+    }
+
+    .login-disabled h2 {
+      font-size: 17px;
+      color: #1e3a5f;
+      margin: 0 0 10px 0;
+    }
+
+    html[data-theme="dark"] .login-disabled h2 { color: #58a6ff; }
+
+    .login-disabled p {
+      font-size: 13.5px;
+      color: #718096;
+      line-height: 1.65;
+      margin: 0 0 12px 0;
+    }
+
+    html[data-theme="dark"] .login-disabled p { color: #8b949e; }
+
+    .login-disabled code {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      background: #f9fafb;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #2d3748;
+      font-size: 12.5px;
+    }
+
+    html[data-theme="dark"] .login-disabled code {
+      background: #1c2128;
+      color: #e6edf3;
+    }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 480px) {
+      body { padding: 16px; }
+      .login-card { padding: 26px 22px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-card">
+
+    <a href="/" class="login-brand">
+      <div class="login-brand-mark">P</div>
+      <div class="login-brand-text">
+        <span class="login-brand-name">PyPDF Studio</span>
+        <span class="login-brand-sub">Administrator access</span>
+      </div>
+    </a>
+
+    {% if admin_disabled %}
+
+      <div class="login-disabled">
+        <div class="login-disabled-icon">🔒</div>
+        <h2>Admin access is disabled</h2>
+        <p>
+          The administrator has not configured a password on this server.
+          Set the <code>PYPDF_ADMIN_PASS</code> environment variable to enable
+          the admin dashboard.
+        </p>
+        <a href="/" class="btn-outline" style="margin-top: 16px;">
+          ← Return to app
+        </a>
+      </div>
+
+    {% else %}
+
+      <h1 class="login-title">Sign in</h1>
+      <p class="login-sub">Enter your administrator credentials to continue.</p>
+
+      {% if error %}
+        <div class="flash error">{{ error }}</div>
+      {% endif %}
+
+      <form method="POST" action="{{ url_for('mtawala_login_submit') }}" class="login-form">
+        <div class="field">
+          <label class="field-label" for="username">Username</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            class="input"
+            placeholder="admin"
+            autocomplete="username"
+            autofocus
+            required
+          />
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            class="input"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+
+        <button type="submit" class="btn-primary">
+          Sign in →
+        </button>
+      </form>
+
+      <div class="login-footer">
+        <a href="/" class="login-back">← Return to app</a>
+      </div>
+
+    {% endif %}
+
+  </div>
+
+</body>
+</html>

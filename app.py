@@ -2,31 +2,37 @@
 # -*- coding: utf-8 -*-
 """PyPDF Studio — Web GUI server.
 
-Includes:
+Features:
   • Auto-cleanup of output/ and uploads/ every 30 minutes.
-  • Basic Auth protecting ONLY the /admin/* routes.
+  • Session-based admin authentication at /mtawala (styled login page).
   • Anonymous analytics: visits, conversions, downloads, devices.
-  • Per-IP rate limiting on conversions.
+  • Per-IP rate limiting on conversions and on admin login attempts.
+  • Light / dark theme (client-side, persisted).
+  • Developer profile page at /about with avatar upload (admin only).
+  • Reset analytics from the admin dashboard (danger zone).
 
-Environment variables (all optional; sensible defaults apply):
+Environment variables:
   PYPDF_ADMIN_USER        (default: "admin")
-  PYPDF_ADMIN_PASS        (required to enable /admin; unset = /admin disabled)
+  PYPDF_ADMIN_PASS        (required to enable admin; unset = admin disabled)
   PYPDF_RATE_LIMIT        (default: 30)   conversions per hour per IP
+  PYPDF_SECRET_KEY        (recommended in production; auto-generated otherwise)
 """
 import io
 import os
 import time
 import uuid
 import shutil
+import secrets
 import threading
 import traceback
 from functools import wraps
 from pathlib import Path
 from collections import deque, defaultdict
+from datetime import timedelta
 
 from flask import (
     Flask, Response, render_template, request, send_file,
-    jsonify, g, make_response,
+    jsonify, g, redirect, url_for, flash, session,
 )
 
 from handlers import TOOLS, HANDLERS, get_tool
@@ -46,9 +52,28 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+AVATAR_DIR = BASE_DIR / "static" / "avatar"
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+
+AVATAR_ALLOWED_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
+AVATAR_MAX_MB = 5
+
 MAX_MB = 100
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
+
+_secret = os.environ.get("PYPDF_SECRET_KEY", "").strip()
+if not _secret:
+    _secret = secrets.token_hex(32)
+app.secret_key = _secret
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("PYPDF_FORCE_HTTPS", "0") == "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+)
 
 
 # ============================================================
@@ -59,31 +84,56 @@ ADMIN_PASS = os.environ.get("PYPDF_ADMIN_PASS", "").strip()
 ADMIN_ENABLED = bool(ADMIN_PASS)
 
 
+def _is_admin_logged_in() -> bool:
+    return bool(session.get("admin_logged_in"))
+
+
 def requires_admin(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not ADMIN_ENABLED:
-            return Response(
-                "Admin access is disabled. Set the PYPDF_ADMIN_PASS "
-                "environment variable to enable it.",
-                503,
-            )
-        auth = request.authorization
-        if not auth or auth.username != ADMIN_USER or auth.password != ADMIN_PASS:
-            return Response(
-                "Admin authentication required.",
-                401,
-                {"WWW-Authenticate": 'Basic realm="PyPDF Admin"'},
-            )
+            flash("Admin access is disabled on this server.", "error")
+            return redirect(url_for("index"))
+        if not _is_admin_logged_in():
+            session["next_url"] = request.full_path
+            return redirect(url_for("mtawala_login_page"))
         return f(*args, **kwargs)
     return wrapper
 
 
 # ============================================================
-# Rate limiting (in-memory, per IP, on /api/run/*)
+# Login attempt throttling
+# ============================================================
+LOGIN_MAX_ATTEMPTS_PER_15MIN = 10
+_login_attempts = defaultdict(deque)
+_login_lock = threading.Lock()
+
+
+def _login_rate_ok(ip: str) -> bool:
+    now = time.time()
+    cutoff = now - 900
+    with _login_lock:
+        bucket = _login_attempts[ip]
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        return len(bucket) < LOGIN_MAX_ATTEMPTS_PER_15MIN
+
+
+def _login_rate_record(ip: str):
+    with _login_lock:
+        _login_attempts[ip].append(time.time())
+
+
+def _login_rate_reset(ip: str):
+    with _login_lock:
+        _login_attempts.pop(ip, None)
+
+
+# ============================================================
+# Conversion rate limiting
 # ============================================================
 RATE_LIMIT_PER_HOUR = int(os.environ.get("PYPDF_RATE_LIMIT", "30"))
-_rate_buckets = defaultdict(deque)   # ip -> deque[timestamps]
+_rate_buckets = defaultdict(deque)
 _rate_lock = threading.Lock()
 
 
@@ -103,7 +153,7 @@ def _rate_limit_ok(ip: str) -> bool:
 
 
 # ============================================================
-# Cleanup settings
+# Cleanup thread
 # ============================================================
 CLEANUP_INTERVAL_SECONDS = 30 * 60
 CLEANUP_MAX_AGE_SECONDS  = 30 * 60
@@ -202,16 +252,41 @@ def _client_ip() -> str:
 
 
 # ============================================================
+# Avatar helpers
+# ============================================================
+def _find_avatar():
+    for ext in ("png", "jpg", "jpeg", "webp", "gif"):
+        p = AVATAR_DIR / f"avatar.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _get_avatar_url():
+    p = _find_avatar()
+    if not p:
+        return None
+    return f"/static/avatar/{p.name}?v={int(p.stat().st_mtime)}"
+
+
+@app.context_processor
+def _inject_globals():
+    return {
+        "avatar_url": _get_avatar_url(),
+        "admin_logged_in": _is_admin_logged_in(),
+        "admin_enabled": ADMIN_ENABLED,
+    }
+
+
+# ============================================================
 # Analytics hooks
 # ============================================================
 @app.before_request
 def _analytics_before():
-    # Don't track static files, admin, health checks, or internal API responses
-    skip_prefixes = ("/static/", "/admin", "/health")
+    skip_prefixes = ("/static/", "/mtawala", "/admin", "/health")
     if request.path.startswith(skip_prefixes):
         return
 
-    # Assign / reuse a session ID
     sid = request.cookies.get("pypdf_sid", "")
     is_new = not sid
     if is_new:
@@ -219,7 +294,6 @@ def _analytics_before():
     g.session_id = sid
     g.is_new_session = is_new
 
-    # Only count page views, not API calls
     if not request.path.startswith("/api/"):
         try:
             analytics.record_visit(
@@ -239,8 +313,7 @@ def _analytics_after(response):
         response.set_cookie(
             "pypdf_sid", g.session_id,
             max_age=60 * 60 * 24 * 30,
-            httponly=True,
-            samesite="Lax",
+            httponly=True, samesite="Lax",
         )
     return response
 
@@ -254,7 +327,7 @@ def health():
 
 
 # ============================================================
-# Pages
+# Public pages
 # ============================================================
 @app.route("/")
 def index():
@@ -283,12 +356,84 @@ def status_page():
                            writers=sorted(set(WRITERS.keys())))
 
 
+@app.route("/about")
+def about_page():
+    return render_template("about.html", avatar_url=_get_avatar_url())
+
+
 # ============================================================
-# Admin dashboard (password-protected)
+# ADMIN — login / logout
 # ============================================================
-@app.route("/admin")
+@app.route("/mtawala", methods=["GET"])
+def mtawala_login_page():
+    if not ADMIN_ENABLED:
+        return render_template(
+            "admin_login.html",
+            admin_disabled=True,
+            error=None,
+        )
+    if _is_admin_logged_in():
+        return redirect(url_for("mtawala_dashboard"))
+    return render_template(
+        "admin_login.html",
+        admin_disabled=False,
+        error=None,
+    )
+
+
+@app.route("/mtawala/login", methods=["POST"])
+def mtawala_login_submit():
+    if not ADMIN_ENABLED:
+        return redirect(url_for("mtawala_login_page"))
+
+    ip = _client_ip()
+
+    if not _login_rate_ok(ip):
+        return render_template(
+            "admin_login.html",
+            admin_disabled=False,
+            error="Too many failed attempts. Please wait 15 minutes and try again.",
+        ), 429
+
+    username = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "")
+
+    user_ok = secrets.compare_digest(username, ADMIN_USER)
+    pass_ok = secrets.compare_digest(password, ADMIN_PASS)
+
+    if user_ok and pass_ok:
+        _login_rate_reset(ip)
+        session.permanent = True
+        session["admin_logged_in"] = True
+        session["admin_user"] = username
+        session["admin_since"] = time.time()
+
+        nxt = session.pop("next_url", None) or url_for("mtawala_dashboard")
+        return redirect(nxt)
+
+    _login_rate_record(ip)
+    return render_template(
+        "admin_login.html",
+        admin_disabled=False,
+        error="Incorrect username or password.",
+    ), 401
+
+
+@app.route("/mtawala/logout", methods=["GET", "POST"])
+def mtawala_logout():
+    session.pop("admin_logged_in", None)
+    session.pop("admin_user", None)
+    session.pop("admin_since", None)
+    flash("You have been signed out.", "success")
+    return redirect(url_for("index"))
+
+
+# ============================================================
+# ADMIN — dashboard & endpoints (protected)
+# ============================================================
+@app.route("/mtawala/dashboard")
 @requires_admin
-def admin_dashboard():
+def mtawala_dashboard():
     try:
         days = float(request.args.get("days", "7"))
     except Exception:
@@ -296,12 +441,16 @@ def admin_dashboard():
     if days not in (1.0, 7.0, 30.0, 0.0):
         days = 7.0
     stats = analytics.get_stats(days=days)
-    return render_template("admin.html", stats=stats)
+    return render_template(
+        "admin.html",
+        stats=stats,
+        admin_user=session.get("admin_user", "admin"),
+    )
 
 
-@app.route("/admin/api/stats")
+@app.route("/mtawala/api/stats")
 @requires_admin
-def admin_api_stats():
+def mtawala_api_stats():
     try:
         days = float(request.args.get("days", "7"))
     except Exception:
@@ -309,9 +458,9 @@ def admin_api_stats():
     return jsonify(analytics.get_stats(days=days))
 
 
-@app.route("/admin/export.csv")
+@app.route("/mtawala/export.csv")
 @requires_admin
-def admin_export_csv():
+def mtawala_export_csv():
     csv_text = analytics.export_csv()
     return Response(
         csv_text,
@@ -320,8 +469,69 @@ def admin_export_csv():
     )
 
 
+@app.route("/mtawala/avatar", methods=["POST"])
+@requires_admin
+def mtawala_avatar_upload():
+    file = request.files.get("avatar")
+    if not file or not file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("mtawala_dashboard"))
+
+    ext = Path(file.filename).suffix.lower().lstrip(".")
+    if ext not in AVATAR_ALLOWED_EXTS:
+        flash("Unsupported image format. Use PNG, JPG, WEBP, or GIF.", "error")
+        return redirect(url_for("mtawala_dashboard"))
+
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    file.seek(0)
+    if size > AVATAR_MAX_MB * 1024 * 1024:
+        flash(f"Image too large. Maximum {AVATAR_MAX_MB} MB.", "error")
+        return redirect(url_for("mtawala_dashboard"))
+
+    for old in AVATAR_DIR.iterdir():
+        try: old.unlink()
+        except Exception: pass
+
+    file.save(AVATAR_DIR / f"avatar.{ext}")
+    flash("Profile picture updated.", "success")
+    return redirect(url_for("mtawala_dashboard"))
+
+
+@app.route("/mtawala/avatar/clear", methods=["POST"])
+@requires_admin
+def mtawala_avatar_clear():
+    for old in AVATAR_DIR.iterdir():
+        try: old.unlink()
+        except Exception: pass
+    flash("Profile picture removed.", "success")
+    return redirect(url_for("mtawala_dashboard"))
+
+
+@app.route("/mtawala/analytics/reset", methods=["POST"])
+@requires_admin
+def mtawala_analytics_reset():
+    try:
+        analytics.reset_all()
+        flash("All analytics data has been reset.", "success")
+    except Exception as e:
+        flash(f"Failed to reset analytics: {e}", "error")
+    return redirect(url_for("mtawala_dashboard"))
+
+
 # ============================================================
-# Preview endpoints
+# Legacy /admin/* → redirect to /mtawala
+# ============================================================
+@app.route("/admin", defaults={"subpath": ""})
+@app.route("/admin/<path:subpath>")
+def legacy_admin_redirect(subpath):
+    if subpath:
+        return redirect(f"/mtawala/{subpath}", code=301)
+    return redirect("/mtawala", code=301)
+
+
+# ============================================================
+# Preview endpoints (public)
 # ============================================================
 @app.route("/api/preview/start/<tool_id>", methods=["POST"])
 def api_preview_start(tool_id):
@@ -425,7 +635,7 @@ def api_preview_secondary(session_id):
 
 
 # ============================================================
-# Conversion API
+# Conversion API (public, rate-limited)
 # ============================================================
 @app.route("/api/run/<tool_id>", methods=["POST"])
 def api_run(tool_id):
@@ -438,7 +648,6 @@ def api_run(tool_id):
 
     ip = _client_ip()
 
-    # ---- Rate limit ----
     if not _rate_limit_ok(ip):
         return jsonify({
             "error": (
@@ -492,7 +701,6 @@ def api_run(tool_id):
         if v is not None and v != "":
             options[k] = v.strip()
 
-    # Infer input/output extensions for analytics
     input_ext = ""
     if saved:
         input_ext = saved[0].suffix.lower()
@@ -544,7 +752,6 @@ def api_run(tool_id):
             success=False,
             error=err_msg,
         )
-
         return jsonify({"error": err_msg}), 500
     finally:
         for p in saved:
@@ -560,7 +767,6 @@ def download(filename):
     p = OUTPUT_DIR / safe
     if not p.exists():
         return "File not found", 404
-
     try:
         analytics.record_download(
             filename=safe,
@@ -569,7 +775,6 @@ def download(filename):
         )
     except Exception:
         pass
-
     return send_file(p, as_attachment=True, download_name=safe)
 
 
@@ -593,7 +798,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  PyPDF Studio — Web GUI")
     print(f"  Open:     http://127.0.0.1:{port}")
-    print(f"  Admin:    http://127.0.0.1:{port}/admin")
+    print(f"  About:    http://127.0.0.1:{port}/about")
+    print(f"  Admin:    http://127.0.0.1:{port}/mtawala")
     print(f"  Status:   http://127.0.0.1:{port}/status")
     print(f"  Health:   http://127.0.0.1:{port}/health")
     print(f"  Admin pw: {'set' if ADMIN_ENABLED else 'NOT SET (admin disabled)'}")

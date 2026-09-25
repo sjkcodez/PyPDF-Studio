@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ tool.name }} — PyPDF Studio</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("pypdf-theme") || "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
 </head>
 <body data-tool-id="{{ tool.id }}"
       data-multiple="{{ 'true' if tool.multiple else 'false' }}"
@@ -22,6 +32,8 @@
         </div>
       </a>
       <div class="topbar-right">
+        <button class="theme-toggle" title="Switch theme" type="button"></button>
+        <a href="/about" class="btn btn-ghost">About Developer</a>
         <a href="/" class="btn btn-ghost">← All tools</a>
       </div>
     </div>
@@ -35,7 +47,6 @@
         <p>{{ tool.desc }}</p>
       </div>
 
-      <!-- ============ STAGE 1 : UPLOAD ============ -->
       <section id="stage-upload" class="stage">
         {% if tool.accept %}
         <div class="dropzone" id="dropzone" tabindex="0">
@@ -78,10 +89,8 @@
         </button>
       </section>
 
-      <!-- ============ STAGE 2 : PREVIEW ============ -->
       {% if tool.get('preview') %}
       <section id="stage-preview" class="stage" hidden>
-
         <div class="preview-toolbar">
           <div class="preview-info">
             <span class="preview-filename" id="preview-filename">—</span>
@@ -95,7 +104,6 @@
         </div>
 
         <div id="preview-controls" class="preview-controls" hidden></div>
-
         <p class="preview-hint" id="preview-hint"></p>
 
         <div id="preview-strip-wrap">
@@ -158,7 +166,6 @@
       </section>
       {% endif %}
 
-      <!-- ============ STAGE 2b : OPTIONS (non-preview tools) ============ -->
       {% if tool.options and not tool.get('preview') %}
       <section id="stage-options" class="stage" hidden>
         <div class="file-summary" id="file-summary"></div>
@@ -196,7 +203,6 @@
       </section>
       {% endif %}
 
-      <!-- ============ STAGE 3 : PROGRESS ============ -->
       <section id="stage-progress" class="stage" hidden>
         <div class="progress">
           <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
@@ -204,7 +210,6 @@
         </div>
       </section>
 
-      <!-- ============ STAGE 4 : RESULT ============ -->
       <section id="stage-result" class="stage" hidden>
         <div class="result-icon success">✓</div>
         <h2 class="result-title">Done</h2>
@@ -215,7 +220,6 @@
         </div>
       </section>
 
-      <!-- ============ STAGE 5 : ERROR ============ -->
       <section id="stage-error" class="stage" hidden>
         <div class="result-icon error">!</div>
         <h2 class="result-title">Something went wrong</h2>
@@ -236,9 +240,18 @@
   </div>
 
   <footer class="footer">
-    <p>PyPDF Studio · runs locally · no file leaves your machine</p>
+    <p>PyPDF Studio · Every document tool you'll ever need</p>
+    <a href="/about" class="about-btn">
+      {% if avatar_url %}
+        <img src="{{ avatar_url }}" class="about-btn-avatar" alt="Developer" />
+      {% else %}
+        <span class="about-btn-avatar-placeholder">S</span>
+      {% endif %}
+      About Developer
+    </a>
   </footer>
 
+  <script src="{{ url_for('static', filename='theme.js') }}"></script>
   <script src="{{ url_for('static', filename='tool.js') }}"></script>
 </body>
 </html>
