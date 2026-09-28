@@ -11,6 +11,11 @@ Features:
   • Developer profile page at /about with avatar upload (admin only).
   • Reset analytics from the admin dashboard (danger zone).
 
+Security note:
+    The legacy /admin path is intentionally NOT a route — it returns 404.
+    There is no redirect from /admin to /mtawala, so scanners that probe
+    common admin paths find nothing.
+
 Environment variables:
   PYPDF_ADMIN_USER        (default: "admin")
   PYPDF_ADMIN_PASS        (required to enable admin; unset = admin disabled)
@@ -32,7 +37,7 @@ from datetime import timedelta
 
 from flask import (
     Flask, Response, render_template, request, send_file,
-    jsonify, g, redirect, url_for, flash, session,
+    jsonify, g, redirect, url_for, flash, session, abort,
 )
 
 from handlers import TOOLS, HANDLERS, get_tool
@@ -95,7 +100,10 @@ def requires_admin(f):
             flash("Admin access is disabled on this server.", "error")
             return redirect(url_for("index"))
         if not _is_admin_logged_in():
-            session["next_url"] = request.full_path
+            # Do NOT store the raw request path here. If someone hits
+            # /admin/... we don't want to redirect them anywhere useful
+            # after login. Always send them to the real dashboard.
+            session["next_url"] = url_for("mtawala_dashboard")
             return redirect(url_for("mtawala_login_page"))
         return f(*args, **kwargs)
     return wrapper
@@ -362,7 +370,7 @@ def about_page():
 
 
 # ============================================================
-# ADMIN — login / logout
+# ADMIN — login / logout (all under /mtawala)
 # ============================================================
 @app.route("/mtawala", methods=["GET"])
 def mtawala_login_page():
@@ -408,8 +416,10 @@ def mtawala_login_submit():
         session["admin_user"] = username
         session["admin_since"] = time.time()
 
-        nxt = session.pop("next_url", None) or url_for("mtawala_dashboard")
-        return redirect(nxt)
+        # Always land on the real dashboard. Never chase a saved path —
+        # that would leak /admin to anyone who probed it before logging in.
+        session.pop("next_url", None)
+        return redirect(url_for("mtawala_dashboard"))
 
     _login_rate_record(ip)
     return render_template(
@@ -520,14 +530,19 @@ def mtawala_analytics_reset():
 
 
 # ============================================================
-# Legacy /admin/* → redirect to /mtawala
+# The legacy /admin path is dead — returns 404
 # ============================================================
-@app.route("/admin", defaults={"subpath": ""})
-@app.route("/admin/<path:subpath>")
-def legacy_admin_redirect(subpath):
-    if subpath:
-        return redirect(f"/mtawala/{subpath}", code=301)
-    return redirect("/mtawala", code=301)
+@app.route("/admin", defaults={"subpath": ""},
+           methods=["GET", "POST", "PUT", "DELETE"])
+@app.route("/admin/<path:subpath>",
+           methods=["GET", "POST", "PUT", "DELETE"])
+def _admin_is_gone(subpath):
+    """Any request to /admin/* gets a plain 404.
+
+    Intentionally NO redirect to /mtawala — scanners that probe common
+    admin paths should find nothing.
+    """
+    abort(404)
 
 
 # ============================================================
