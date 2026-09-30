@@ -1,5 +1,7 @@
-/* Individual tool page logic — v5.4
+/* Individual tool page logic — v5.5
    Sign PDF now uses a clickable arrow pad instead of numeric X/Y fields.
+   v5.5: the show() helper now toggles a body class so the CSS can widen
+         the tool panel while the preview stage is visible.
 */
 (() => {
   const body = document.body;
@@ -42,6 +44,8 @@
     [stageUpload, stageOptions, stagePreview, stageProgress, stageResult, stageError]
       .forEach((s) => s && (s.hidden = true));
     if (el) el.hidden = false;
+    // Widen the tool panel only while the preview stage is visible.
+    document.body.classList.toggle("preview-active", el === stagePreview);
   }
 
   function updateNextState() {

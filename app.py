@@ -593,7 +593,9 @@ def api_preview_start(tool_id):
             shutil.rmtree(work, ignore_errors=True)
             return jsonify({"error": "PDF has no pages."}), 400
         for i, page in enumerate(doc):
-            pix = page.get_pixmap(dpi=50)
+            # dpi=110 gives crisp thumbnails for the enlarged preview cards
+            # (was 50 — too small for the 190px-wide cards).
+            pix = page.get_pixmap(dpi=110)
             pix.save(work / f"thumb_{i+1}.png")
         doc.close()
     except Exception as e:
@@ -634,7 +636,8 @@ def api_preview_page(session_id, page_num):
     try:
         import fitz
         doc = fitz.open(info["path"])
-        pix = doc[page_num - 1].get_pixmap(dpi=140)
+        # dpi=200 gives a sharp lightbox image (was 140).
+        pix = doc[page_num - 1].get_pixmap(dpi=200)
         doc.close()
         buf = io.BytesIO(pix.tobytes("png")); buf.seek(0)
         return send_file(buf, mimetype="image/png")

@@ -324,6 +324,15 @@ a { color: inherit; text-decoration: none; }
    ============================================================ */
 .tool-main { max-width: 680px; margin: 0 auto; padding: 40px 24px 60px; }
 
+/* Preview stage gets a wider canvas than the upload stage.
+   tool.js toggles body.preview-active when the preview stage is shown. */
+body.preview-active .tool-main {
+  max-width: 1180px;
+}
+body.preview-active .tool-panel {
+  padding: 32px 36px;
+}
+
 .tool-panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -631,10 +640,10 @@ select.input {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 18px 14px;
+  padding: 22px 18px;
   overflow-x: auto;
   margin-bottom: 18px;
-  min-height: 180px;
+  min-height: 300px;
 }
 
 .preview-loading {
@@ -654,22 +663,22 @@ select.input {
 
 .preview-strip {
   display: flex; align-items: center; gap: 0;
-  padding-bottom: 8px; min-height: 160px;
+  padding-bottom: 8px; min-height: 260px;
 }
 
 .preview-card {
   position: relative; flex: 0 0 auto;
-  width: 118px; height: 160px;
+  width: 190px; height: 258px;
   background: var(--surface);
   border: 2px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer; overflow: hidden;
   transition: var(--transition);
   display: flex; align-items: center; justify-content: center;
 }
 .preview-card:hover {
   border-color: var(--blue);
-  box-shadow: 0 4px 12px rgba(49, 130, 206, 0.18);
+  box-shadow: 0 6px 18px rgba(49, 130, 206, 0.22);
   transform: translateY(-2px);
 }
 .preview-thumb {
@@ -678,21 +687,21 @@ select.input {
   user-select: none; pointer-events: none;
 }
 .preview-page-num {
-  position: absolute; top: 4px; right: 6px;
-  font-size: 10.5px; font-weight: 600;
+  position: absolute; top: 6px; right: 8px;
+  font-size: 12px; font-weight: 600;
   color: var(--muted);
   background: var(--surface-2);
-  padding: 1px 6px; border-radius: 4px;
+  padding: 2px 8px; border-radius: 5px;
   border: 1px solid var(--border);
 }
 .preview-zoom {
-  position: absolute; bottom: 4px; right: 6px;
+  position: absolute; bottom: 6px; right: 8px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  width: 22px; height: 22px;
+  border-radius: 6px;
+  width: 28px; height: 28px;
   display: grid; place-items: center;
-  font-size: 11px; cursor: pointer;
+  font-size: 13px; cursor: pointer;
   opacity: 0; transition: var(--transition);
   padding: 0; line-height: 1;
 }
@@ -708,7 +717,7 @@ select.input {
   position: absolute; inset: 0;
   background: rgba(229, 62, 62, 0.35);
   color: #fff; display: grid; place-items: center;
-  font-size: 42px; font-weight: 300;
+  font-size: 56px; font-weight: 300;
 }
 .preview-card.marked-extract {
   border-color: var(--success);
@@ -719,7 +728,7 @@ select.input {
   position: absolute; inset: 0;
   background: rgba(56, 161, 105, 0.3);
   color: #fff; display: grid; place-items: center;
-  font-size: 42px; font-weight: 600;
+  font-size: 56px; font-weight: 600;
 }
 .preview-card.swap-active {
   border-color: var(--teal);
@@ -730,7 +739,7 @@ select.input {
   flex: 0 0 auto;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  width: 44px; gap: 6px; align-self: stretch;
+  width: 56px; gap: 6px; align-self: stretch;
 }
 .preview-scissors-line {
   flex: 1; width: 0;
@@ -741,8 +750,8 @@ select.input {
   background: var(--surface);
   border: 1px solid var(--border-2);
   border-radius: 50%;
-  width: 32px; height: 32px;
-  font-size: 15px; color: var(--muted);
+  width: 36px; height: 36px;
+  font-size: 17px; color: var(--muted);
   cursor: pointer; transition: var(--transition);
   display: grid; place-items: center;
   padding: 0; line-height: 1;
@@ -899,7 +908,7 @@ select.input {
   color: #333;
 }
 .wm-overlay.wm-text {
-  font-size: 22px; text-transform: uppercase;
+  font-size: 34px; text-transform: uppercase;
   font-family: Georgia, "Times New Roman", serif;
 }
 .wm-overlay.wm-image {
@@ -1124,9 +1133,12 @@ select.input {
   .tool-cat { display: none; }
   .tool-main { padding: 24px 16px 40px; }
   .tool-panel { padding: 22px; }
-  .preview-card { width: 92px; height: 130px; }
-  .preview-scissors { width: 34px; }
+  .preview-card { width: 132px; height: 180px; }
+  .preview-scissors { width: 40px; }
   .preview-filename { max-width: 180px; }
+  /* Never let the widened preview canvas overflow a phone */
+  body.preview-active .tool-main { max-width: 100%; }
+  body.preview-active .tool-panel { padding: 22px; }
   .about-wrap { padding: 32px 16px 60px; }
   .profile-card { padding: 24px; }
   .profile-avatar, .profile-avatar-placeholder { width: 90px; height: 90px; }
@@ -1137,7 +1149,8 @@ select.input {
 @media (max-width: 420px) {
   .grid { grid-template-columns: 1fr; }
   .contact-grid { grid-template-columns: 1fr; }
-}}
+}
+
 /* ============================================================
    ADMIN LOGIN PAGE
    ============================================================ */
