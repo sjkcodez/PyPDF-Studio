@@ -13,7 +13,7 @@ services:
       - key: PYPDF_ADMIN_USER
         value: admin
       - key: PYPDF_ADMIN_PASS
-        sync: false                 # set in Render dashboard
+        sync: false
       - key: PYPDF_SECRET_KEY
         generateValue: true
       - key: PYPDF_RATE_LIMIT
@@ -27,8 +27,12 @@ services:
       - key: PORT
         value: "10000"
 
+      # ---- Timezone ----
+      - key: TZ
+        value: "Africa/Dar_es_Salaam"
+
       # ---- Google Sheets persistence ----
-      - key: GOOGLE_CREDS
-        sync: false                 # paste service-account JSON in dashboard
+      - key: GOOGLE_CREDS_FILE
+        value: /etc/secrets/gcp-sa.json
       - key: SHEET_ID
-        sync: false                 # paste spreadsheet ID in dashboard
+        sync: false
