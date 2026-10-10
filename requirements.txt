@@ -10,15 +10,7 @@
 #   • ghostscript     → needed for advanced PDF compression
 #   • libheif / libraw → needed for HEIC and RAW image support
 #
-# On a VPS (Ubuntu/Debian):
-#   sudo apt install -y \
-#       tesseract-ocr tesseract-ocr-swa \
-#       libreoffice ghostscript \
-#       libheif-dev libraw-dev
-#
-# On Render: these are NOT available on the free tier. Features
-# that need them will show a friendly error until you migrate to
-# a Docker-based deployment.
+# These are bundled in the Dockerfile. See ./Dockerfile.
 # ============================================================
 
 
@@ -74,3 +66,7 @@ waitress>=3.0.0
 
 # ---------- Optional (needed by pdf2docx on some systems) ----------
 opencv-python-headless>=4.8.0
+
+# ---------- Google Sheets analytics persistence ----------
+gspread>=6.0.0
+google-auth>=2.30.0

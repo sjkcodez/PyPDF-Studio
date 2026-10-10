@@ -11,17 +11,24 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 
-# ---------- Runtime data (should never go to GitHub) ----------
+# ---------- Runtime data (never goes to GitHub) ----------
 output/
 uploads/
 temp/
 logs/
+data/
 *.log
 
-# ---------- Flask / Flask session artifacts ----------
+# ---------- Uploaded avatars (but keep the folder) ----------
+static/avatar/*
+!static/avatar/.gitkeep
+
+# ---------- Flask / env artifacts ----------
 instance/
 .flaskenv
 .env
+.env.local
+.env.*.local
 
 # ---------- IDE / editors ----------
 .vscode/
@@ -33,3 +40,7 @@ instance/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------- Google Cloud credentials ----------
+secrets/
+*.json.bak

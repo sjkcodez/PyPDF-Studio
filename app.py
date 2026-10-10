@@ -9,18 +9,18 @@ Features:
   • Per-IP rate limiting on conversions and on admin login attempts.
   • Light / dark theme (client-side, persisted).
   • Developer profile page at /about with avatar upload (admin only).
-  • Reset analytics from the admin dashboard (danger zone).
+  • Google Sheets mirror + hydration for persistent analytics on Render.
 
 Security note:
     The legacy /admin path is intentionally NOT a route — it returns 404.
-    There is no redirect from /admin to /mtawala, so scanners that probe
-    common admin paths find nothing.
 
 Environment variables:
   PYPDF_ADMIN_USER        (default: "admin")
   PYPDF_ADMIN_PASS        (required to enable admin; unset = admin disabled)
   PYPDF_RATE_LIMIT        (default: 30)   conversions per hour per IP
   PYPDF_SECRET_KEY        (recommended in production; auto-generated otherwise)
+  GOOGLE_CREDS            (service-account JSON, one line)
+  SHEET_ID                (Google Sheets spreadsheet ID)
 """
 import io
 import os
@@ -46,6 +46,7 @@ from core.readers import READERS
 from core.writers import WRITERS
 
 import analytics
+from core import sheet_logger
 
 
 # ============================================================
@@ -100,9 +101,6 @@ def requires_admin(f):
             flash("Admin access is disabled on this server.", "error")
             return redirect(url_for("index"))
         if not _is_admin_logged_in():
-            # Do NOT store the raw request path here. If someone hits
-            # /admin/... we don't want to redirect them anywhere useful
-            # after login. Always send them to the real dashboard.
             session["next_url"] = url_for("mtawala_dashboard")
             return redirect(url_for("mtawala_login_page"))
         return f(*args, **kwargs)
@@ -182,7 +180,8 @@ def _delete_old_files(folder: Path, max_age_seconds: int):
                 path.unlink(); df += 1
         except Exception:
             continue
-    for path in sorted(folder.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+    for path in sorted(folder.rglob("*"), key=lambda p: len(p.parts),
+                       reverse=True):
         try:
             if path.is_dir() and not any(path.iterdir()):
                 path.rmdir(); dd += 1
@@ -211,7 +210,8 @@ def cleanup_loop():
             uf, _ = _delete_old_files(UPLOAD_DIR, CLEANUP_MAX_AGE_SECONDS)
             pv = _cleanup_preview_sessions()
             if of or uf or pv:
-                print(f"[cleanup] output={of} uploads={uf} previews={pv}", flush=True)
+                print(f"[cleanup] output={of} uploads={uf} previews={pv}",
+                      flush=True)
         except Exception:
             traceback.print_exc()
         time.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -225,6 +225,14 @@ def start_cleanup_thread():
 
 start_cleanup_thread()
 
+# Google Sheets persistence: start the background worker.
+# The worker also runs a one-time hydrate-from-Sheets on startup,
+# which restores the SQLite cache after a Render cold start.
+try:
+    sheet_logger.start()
+except Exception as _e:
+    print(f"[startup] sheet_logger.start() failed: {_e}", flush=True)
+
 
 # ============================================================
 # Diagnostics
@@ -233,8 +241,10 @@ def _check_binaries():
     return {
         "tesseract":   shutil.which("tesseract") is not None,
         "ffmpeg":      shutil.which("ffmpeg") is not None,
-        "libreoffice": (shutil.which("soffice") or shutil.which("libreoffice")) is not None,
-        "ghostscript": (shutil.which("gs") or shutil.which("gswin64c")) is not None,
+        "libreoffice": (shutil.which("soffice") or
+                        shutil.which("libreoffice")) is not None,
+        "ghostscript": (shutil.which("gs") or
+                        shutil.which("gswin64c")) is not None,
     }
 
 
@@ -242,7 +252,8 @@ def _check_python_modules():
     mods = ["pypdf", "fitz", "docx", "pptx", "openpyxl", "reportlab",
             "weasyprint", "xhtml2pdf", "markdown", "ebooklib", "PIL",
             "bs4", "lxml", "pytesseract", "ezdxf", "dbfread", "dbf",
-            "psd_tools", "vsdx", "pdf2docx", "xmltodict"]
+            "psd_tools", "vsdx", "pdf2docx", "xmltodict",
+            "gspread", "google.oauth2"]
     out = {}
     for m in mods:
         try:
@@ -400,7 +411,8 @@ def mtawala_login_submit():
         return render_template(
             "admin_login.html",
             admin_disabled=False,
-            error="Too many failed attempts. Please wait 15 minutes and try again.",
+            error=("Too many failed attempts. Please wait 15 minutes "
+                   "and try again."),
         ), 429
 
     username = (request.form.get("username") or "").strip()
@@ -415,9 +427,6 @@ def mtawala_login_submit():
         session["admin_logged_in"] = True
         session["admin_user"] = username
         session["admin_since"] = time.time()
-
-        # Always land on the real dashboard. Never chase a saved path —
-        # that would leak /admin to anyone who probed it before logging in.
         session.pop("next_url", None)
         return redirect(url_for("mtawala_dashboard"))
 
@@ -500,8 +509,10 @@ def mtawala_avatar_upload():
         return redirect(url_for("mtawala_dashboard"))
 
     for old in AVATAR_DIR.iterdir():
-        try: old.unlink()
-        except Exception: pass
+        try:
+            old.unlink()
+        except Exception:
+            pass
 
     file.save(AVATAR_DIR / f"avatar.{ext}")
     flash("Profile picture updated.", "success")
@@ -512,8 +523,10 @@ def mtawala_avatar_upload():
 @requires_admin
 def mtawala_avatar_clear():
     for old in AVATAR_DIR.iterdir():
-        try: old.unlink()
-        except Exception: pass
+        try:
+            old.unlink()
+        except Exception:
+            pass
     flash("Profile picture removed.", "success")
     return redirect(url_for("mtawala_dashboard"))
 
@@ -537,11 +550,6 @@ def mtawala_analytics_reset():
 @app.route("/admin/<path:subpath>",
            methods=["GET", "POST", "PUT", "DELETE"])
 def _admin_is_gone(subpath):
-    """Any request to /admin/* gets a plain 404.
-
-    Intentionally NO redirect to /mtawala — scanners that probe common
-    admin paths should find nothing.
-    """
     abort(404)
 
 
@@ -580,7 +588,8 @@ def api_preview_start(tool_id):
 
     second_path = second_name = None
     if second_file is not None:
-        second_path = work / ("secondary" + Path(second_file.filename).suffix.lower())
+        second_path = work / ("secondary" +
+                              Path(second_file.filename).suffix.lower())
         second_file.save(second_path)
         second_name = second_file.filename
 
@@ -593,8 +602,6 @@ def api_preview_start(tool_id):
             shutil.rmtree(work, ignore_errors=True)
             return jsonify({"error": "PDF has no pages."}), 400
         for i, page in enumerate(doc):
-            # dpi=110 gives crisp thumbnails for the enlarged preview cards
-            # (was 50 — too small for the 190px-wide cards).
             pix = page.get_pixmap(dpi=110)
             pix.save(work / f"thumb_{i+1}.png")
         doc.close()
@@ -615,31 +622,36 @@ def api_preview_start(tool_id):
         "page_count": pages,
         "filename": pdf_file.filename,
         "secondary_filename": second_name,
-        "secondary_url": f"/api/preview/secondary/{session_id}" if second_path else None,
+        "secondary_url": (f"/api/preview/secondary/{session_id}"
+                          if second_path else None),
     })
 
 
 @app.route("/api/preview/thumb/<session_id>/<int:page_num>")
 def api_preview_thumb(session_id, page_num):
     info = PREVIEW_SESSIONS.get(session_id)
-    if not info: return "Not found", 404
+    if not info:
+        return "Not found", 404
     path = Path(info["dir"]) / f"thumb_{page_num}.png"
-    if not path.exists(): return "Not found", 404
+    if not path.exists():
+        return "Not found", 404
     return send_file(path, mimetype="image/png")
 
 
 @app.route("/api/preview/page/<session_id>/<int:page_num>")
 def api_preview_page(session_id, page_num):
     info = PREVIEW_SESSIONS.get(session_id)
-    if not info: return "Not found", 404
-    if page_num < 1 or page_num > info["pages"]: return "Invalid page", 400
+    if not info:
+        return "Not found", 404
+    if page_num < 1 or page_num > info["pages"]:
+        return "Invalid page", 400
     try:
         import fitz
         doc = fitz.open(info["path"])
-        # dpi=200 gives a sharp lightbox image (was 140).
         pix = doc[page_num - 1].get_pixmap(dpi=200)
         doc.close()
-        buf = io.BytesIO(pix.tobytes("png")); buf.seek(0)
+        buf = io.BytesIO(pix.tobytes("png"))
+        buf.seek(0)
         return send_file(buf, mimetype="image/png")
     except Exception as e:
         return f"Error: {e}", 500
@@ -648,7 +660,8 @@ def api_preview_page(session_id, page_num):
 @app.route("/api/preview/secondary/<session_id>")
 def api_preview_secondary(session_id):
     info = PREVIEW_SESSIONS.get(session_id)
-    if not info or not info.get("second"): return "Not found", 404
+    if not info or not info.get("second"):
+        return "Not found", 404
     return send_file(info["second"])
 
 
@@ -773,10 +786,14 @@ def api_run(tool_id):
         return jsonify({"error": err_msg}), 500
     finally:
         for p in saved:
-            try: p.unlink()
-            except Exception: pass
-        try: work.rmdir()
-        except Exception: pass
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        try:
+            work.rmdir()
+        except Exception:
+            pass
 
 
 @app.route("/api/download/<path:filename>")
@@ -822,6 +839,7 @@ if __name__ == "__main__":
     print(f"  Health:   http://127.0.0.1:{port}/health")
     print(f"  Admin pw: {'set' if ADMIN_ENABLED else 'NOT SET (admin disabled)'}")
     print(f"  Rate cap: {RATE_LIMIT_PER_HOUR} / hour / IP")
+    print(f"  Sheets:   {'enabled' if os.environ.get('SHEET_ID') else 'disabled'}")
     print("=" * 60)
 
     serve(app, host="0.0.0.0", port=port, threads=8, channel_timeout=300)

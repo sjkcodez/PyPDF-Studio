@@ -1,0 +1,36 @@
+services:
+  pypdf-studio:
+    build: .
+    image: pypdf-studio:latest
+    container_name: pypdf-studio
+    restart: unless-stopped
+    ports:
+      - "10000:10000"
+    environment:
+      - PYPDF_ADMIN_USER=${PYPDF_ADMIN_USER}
+      - PYPDF_ADMIN_PASS=${PYPDF_ADMIN_PASS}
+      - PYPDF_SECRET_KEY=${PYPDF_SECRET_KEY}
+      - PYPDF_RATE_LIMIT=${PYPDF_RATE_LIMIT}
+      - PYPDF_FORCE_HTTPS=${PYPDF_FORCE_HTTPS}
+      - PORT=10000
+      - SHEET_ID=${SHEET_ID}
+      - GOOGLE_CREDS_FILE=/app/secrets/gcp-sa.json
+      - TZ=Africa/Dar_es_Salaam 
+    volumes:
+      - ./data/logs:/app/logs
+      - ./data/output:/app/output
+      - ./data/uploads:/app/uploads
+      - ./data/temp:/app/temp
+      - ./data/avatar:/app/static/avatar
+      - ./secrets:/app/secrets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

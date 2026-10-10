@@ -1,0 +1,50 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+
+# ---- App data (must NOT be baked into the image) ----
+logs/
+output/
+uploads/
+temp/
+static/avatar/*
+!static/avatar/.gitkeep
+
+# ---- Dev / editor ----
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Docs / tests ----
+README.md
+LICENSE
+*.md
+tests/
+.pytest_cache/
+
+# ---- Environment ----
+.env
+.env.*
+*.log
+
+# ---- Docker / build cruft ----
+Dockerfile
+.dockerignore
+docker-compose.yml
+render.yaml

@@ -5,10 +5,19 @@ Tracks:
   • Conversions       (tool, input/output ext, sizes, duration, success/fail)
   • Downloads         (filename, IP, session_id)
 
-All writes are best-effort: a failure here never breaks a conversion.
+Writes are best-effort: a failure here never breaks a conversion.
 
-Data lives in `logs/analytics.db`. On Render's free tier this file is
-erased when the container restarts.
+Persistence:
+  • SQLite lives in `logs/analytics.db` — fast, local.
+  • Every event is ALSO mirrored to Google Sheets via core.sheet_logger
+    (batched, async). On Render's ephemeral disk, the SQLite file is
+    rehydrated from Sheets on each cold start.
+
+Timestamps:
+  • Stored as Unix epoch seconds (time.time()) — timezone-agnostic.
+  • Displayed via datetime.fromtimestamp() — shows container local time.
+  • Requires TZ=Africa/Dar_es_Salaam in docker-compose.yml + tzdata
+    installed in the Docker image for local-time display to work.
 """
 import csv
 import io
@@ -18,6 +27,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+from core import sheet_logger
 
 
 # ============================================================
@@ -144,13 +155,15 @@ def _detect_browser(ua: str) -> str:
 # Recording
 # ============================================================
 def record_visit(ip: str, ua: str, path: str, referrer: str, session_id: str):
+    # --- Local SQLite write (fast) ---
     try:
         with _LOCK:
             conn = _connect()
             try:
                 conn.execute(
                     """INSERT INTO visits
-                       (ts, ip, user_agent, device, os, browser, path, referrer, session_id)
+                       (ts, ip, user_agent, device, os, browser,
+                        path, referrer, session_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         time.time(), ip or "", ua or "",
@@ -161,6 +174,19 @@ def record_visit(ip: str, ua: str, path: str, referrer: str, session_id: str):
                 conn.commit()
             finally:
                 conn.close()
+    except Exception:
+        pass
+
+    # --- Mirror to Google Sheets (async, batched) ---
+    try:
+        sheet_logger.log_visit(
+            ip=ip or "",
+            path=path or "",
+            referrer=referrer or "",
+            device=_detect_device(ua),
+            browser=_detect_browser(ua),
+            session_id=session_id or "",
+        )
     except Exception:
         pass
 
@@ -177,6 +203,7 @@ def record_conversion(
     success: bool,
     error: str = "",
 ):
+    # --- Local SQLite write ---
     try:
         with _LOCK:
             conn = _connect()
@@ -184,12 +211,15 @@ def record_conversion(
                 conn.execute(
                     """INSERT INTO conversions
                        (ts, tool_id, input_ext, output_ext, input_size,
-                        output_size, duration_ms, ip, session_id, success, error)
+                        output_size, duration_ms, ip, session_id,
+                        success, error)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        time.time(), tool_id or "", input_ext or "", output_ext or "",
-                        int(input_size or 0), int(output_size or 0), int(duration_ms or 0),
-                        ip or "", session_id or "", 1 if success else 0, (error or "")[:300],
+                        time.time(), tool_id or "", input_ext or "",
+                        output_ext or "", int(input_size or 0),
+                        int(output_size or 0), int(duration_ms or 0),
+                        ip or "", session_id or "",
+                        1 if success else 0, (error or "")[:300],
                     ),
                 )
                 conn.commit()
@@ -198,19 +228,47 @@ def record_conversion(
     except Exception:
         pass
 
+    # --- Mirror to Google Sheets ---
+    try:
+        sheet_logger.log_conversion(
+            tool_id=tool_id or "",
+            input_ext=input_ext or "",
+            output_ext=output_ext or "",
+            input_size=int(input_size or 0),
+            output_size=int(output_size or 0),
+            duration_ms=int(duration_ms or 0),
+            success=bool(success),
+            error=error or "",
+            session_id=session_id or "",
+        )
+    except Exception:
+        pass
+
 
 def record_download(filename: str, ip: str, session_id: str):
+    # --- Local SQLite write ---
     try:
         with _LOCK:
             conn = _connect()
             try:
                 conn.execute(
-                    "INSERT INTO downloads (ts, filename, ip, session_id) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO downloads (ts, filename, ip, session_id) "
+                    "VALUES (?, ?, ?, ?)",
                     (time.time(), filename or "", ip or "", session_id or ""),
                 )
                 conn.commit()
             finally:
                 conn.close()
+    except Exception:
+        pass
+
+    # --- Mirror to Google Sheets ---
+    try:
+        sheet_logger.log_download(
+            filename=filename or "",
+            ip=ip or "",
+            session_id=session_id or "",
+        )
     except Exception:
         pass
 
@@ -247,7 +305,8 @@ def get_stats(days: float = 7.0) -> dict:
         ).fetchone()[0]
 
         out["totals"]["unique_visitors"] = conn.execute(
-            "SELECT COUNT(DISTINCT session_id) FROM visits WHERE ts >= ? AND session_id != ''",
+            "SELECT COUNT(DISTINCT session_id) FROM visits "
+            "WHERE ts >= ? AND session_id != ''",
             (since,),
         ).fetchone()[0]
 
@@ -292,7 +351,7 @@ def get_stats(days: float = 7.0) -> dict:
         out["browsers"] = _group_count(conn, "visits", "browser", since)
         out["os"] = _group_count(conn, "visits", "os", since)
 
-        # ---- Daily visits (last N days, capped at 14 for display) ----
+        # ---- Daily visits ----
         daily_n = int(min(max(days, 1), 14))
         out["daily_visits"] = _daily_counts(conn, "visits", daily_n)
 
@@ -306,7 +365,9 @@ def get_stats(days: float = 7.0) -> dict:
         ).fetchall()
         out["recent_conversions"] = [
             {
-                "ts_str": datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:%M:%S"),
+                "ts_str": datetime.fromtimestamp(r["ts"]).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
                 "tool_id": r["tool_id"],
                 "input_ext": r["input_ext"],
                 "output_ext": r["output_ext"],
@@ -322,7 +383,9 @@ def get_stats(days: float = 7.0) -> dict:
         ).fetchall()
         out["recent_downloads"] = [
             {
-                "ts_str": datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:%M:%S"),
+                "ts_str": datetime.fromtimestamp(r["ts"]).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
                 "filename": r["filename"],
             }
             for r in rows
@@ -341,13 +404,14 @@ def _group_count(conn, table: str, column: str, since: float):
     ).fetchall()
     total = sum(r["n"] for r in rows) or 1
     return [
-        {"name": r["k"] or "unknown", "count": r["n"], "pct": r["n"] / total * 100.0}
+        {"name": r["k"] or "unknown", "count": r["n"],
+         "pct": r["n"] / total * 100.0}
         for r in rows
     ]
 
 
 def _daily_counts(conn, table: str, days: int):
-    """Return per-day counts for the last `days` days."""
+    """Return per-day counts for the last `days` days (local midnight)."""
     out = []
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     for i in range(days - 1, -1, -1):
@@ -392,11 +456,7 @@ def export_csv() -> str:
 # Reset
 # ============================================================
 def reset_all():
-    """Delete all analytics data and reset auto-increment counters.
-
-    Wipes the three tables and resets their AUTOINCREMENT sequences so
-    that fresh IDs start at 1 again.
-    """
+    """Delete all analytics data and reset auto-increment counters."""
     with _LOCK:
         conn = _connect()
         try:

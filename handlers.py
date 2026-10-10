@@ -6,6 +6,8 @@ Changes in this version:
 - Falls back to the previous CSV-based approach if no tables are detected
   or if color extraction fails for any reason.
 - Everything else unchanged from v6.8.
+- FIX: shutil.move() replaces Path.replace() so files can cross Docker
+  bind-mount boundaries (uploads/ and output/ are separate mounts).
 """
 import io
 import os
@@ -1141,7 +1143,9 @@ def _try_pdf2docx_with_cleanup(pdf_path: Path, out_path: Path) -> bool:
             pass
 
         if _is_docx_readable(tmp_clean):
-            tmp_clean.replace(out_path)
+            # Cross-device safe move: shutil.move falls back to copy+delete
+            # when os.rename fails with EXDEV (Docker bind mounts).
+            shutil.move(str(tmp_clean), str(out_path))
             return True
         return True
     finally:
@@ -1961,7 +1965,8 @@ def handle_universal(files, options, work):
             )
         out = _out(src.stem, target_ext)
         converted = libreoffice.convert(src, target_ext, work)
-        Path(converted).replace(out)
+        # Cross-device safe move
+        shutil.move(str(converted), str(out))
         return out
 
     # PDF → various
@@ -1998,7 +2003,8 @@ def handle_universal(files, options, work):
                     )
                 out = _out(src.stem, target)
                 converted = libreoffice.convert(tmp_docx, target, tdp)
-                Path(converted).replace(out)
+                # Cross-device safe move
+                shutil.move(str(converted), str(out))
                 return out
 
         if target in ("pptx", "ppt", "odp"):
@@ -2017,7 +2023,8 @@ def handle_universal(files, options, work):
                     )
                 out = _out(src.stem, target)
                 converted = libreoffice.convert(tmp_pptx, target, tdp)
-                Path(converted).replace(out)
+                # Cross-device safe move
+                shutil.move(str(converted), str(out))
                 return out
 
         if target in ("xlsx", "xls", "ods"):
@@ -2036,7 +2043,8 @@ def handle_universal(files, options, work):
                     )
                 out = _out(src.stem, target)
                 converted = libreoffice.convert(tmp_xlsx, target, tdp)
-                Path(converted).replace(out)
+                # Cross-device safe move
+                shutil.move(str(converted), str(out))
                 return out
 
         if target in ("csv", "tsv"):
