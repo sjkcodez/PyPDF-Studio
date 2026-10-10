@@ -2,25 +2,14 @@
 # -*- coding: utf-8 -*-
 """PyPDF Studio — Web GUI server.
 
-Features:
-  • Auto-cleanup of output/ and uploads/ every 30 minutes.
-  • Session-based admin authentication at /mtawala (styled login page).
-  • Anonymous analytics: visits, conversions, downloads, devices.
-  • Per-IP rate limiting on conversions and on admin login attempts.
-  • Light / dark theme (client-side, persisted).
-  • Developer profile page at /about with avatar upload (admin only).
-  • Google Sheets mirror + hydration for persistent analytics on Render.
-
-Security note:
-    The legacy /admin path is intentionally NOT a route — it returns 404.
-
 Environment variables:
   PYPDF_ADMIN_USER        (default: "admin")
   PYPDF_ADMIN_PASS        (required to enable admin; unset = admin disabled)
   PYPDF_RATE_LIMIT        (default: 30)   conversions per hour per IP
   PYPDF_SECRET_KEY        (recommended in production; auto-generated otherwise)
-  GOOGLE_CREDS            (service-account JSON, one line)
+  GOOGLE_CREDS_FILE       (path to service-account JSON; enables Sheets)
   SHEET_ID                (Google Sheets spreadsheet ID)
+  TZ                      (e.g. Africa/Dar_es_Salaam)
 """
 import io
 import os
@@ -225,9 +214,7 @@ def start_cleanup_thread():
 
 start_cleanup_thread()
 
-# Google Sheets persistence: start the background worker.
-# The worker also runs a one-time hydrate-from-Sheets on startup,
-# which restores the SQLite cache after a Render cold start.
+# Google Sheets persistence
 try:
     sheet_logger.start()
 except Exception as _e:
@@ -302,7 +289,8 @@ def _inject_globals():
 # ============================================================
 @app.before_request
 def _analytics_before():
-    skip_prefixes = ("/static/", "/mtawala", "/admin", "/health")
+    skip_prefixes = ("/static/", "/mtawala", "/admin", "/health",
+                     "/debug/")
     if request.path.startswith(skip_prefixes):
         return
 
@@ -346,6 +334,83 @@ def health():
 
 
 # ============================================================
+# Debug: Google Sheets end-to-end test
+# ============================================================
+@app.route("/debug/sheet-test")
+def debug_sheet_test():
+    """One-shot diagnostic: env vars, credentials, sheet access, direct write."""
+    import json as _j
+    from datetime import datetime as _dt
+
+    result = {"env": {
+        "GOOGLE_CREDS_FILE": os.environ.get("GOOGLE_CREDS_FILE", "NOT SET"),
+        "SHEET_ID": os.environ.get("SHEET_ID", "NOT SET"),
+        "TZ": os.environ.get("TZ", "NOT SET"),
+    }}
+
+    # 1. Read creds file
+    try:
+        creds_file = os.environ.get("GOOGLE_CREDS_FILE", "")
+        with open(creds_file, "r") as f:
+            creds_dict = _j.load(f)
+        result["creds_ok"] = True
+        result["client_email"] = creds_dict.get("client_email", "?")
+    except Exception as e:
+        result["creds_error"] = f"{type(e).__name__}: {e}"
+        return jsonify(result), 500
+
+    # 2. Connect and list tabs
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds_obj = Credentials.from_service_account_info(
+            creds_dict, scopes=scopes
+        )
+        client = gspread.authorize(creds_obj)
+        sh = client.open_by_key(os.environ.get("SHEET_ID", ""))
+        result["sheet_title"] = sh.title
+        result["tabs"] = [ws.title for ws in sh.worksheets()]
+    except Exception as e:
+        result["connect_error"] = f"{type(e).__name__}: {e}"
+        result["traceback"] = traceback.format_exc()
+        return jsonify(result), 500
+
+    # 3. Direct write test
+    try:
+        ws = sh.worksheet("Visits")
+        row = [
+            _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "DEBUG-IP",
+            "/debug/sheet-test",
+            "debug",
+            "server",
+            "test",
+            "DEBUG-SESSION",
+        ]
+        ws.append_rows([row], value_input_option="USER_ENTERED")
+        result["write_ok"] = True
+        result["test_row"] = row
+    except Exception as e:
+        result["write_error"] = f"{type(e).__name__}: {e}"
+        result["traceback"] = traceback.format_exc()
+
+    # 4. Read back row count
+    try:
+        ws = sh.worksheet("Visits")
+        all_values = ws.get_all_values()
+        result["visits_total_rows"] = len(all_values)
+        result["visits_last_row"] = all_values[-1] if all_values else None
+    except Exception as e:
+        result["readback_error"] = str(e)
+
+    return jsonify(result)
+
+
+# ============================================================
 # Public pages
 # ============================================================
 @app.route("/")
@@ -381,23 +446,17 @@ def about_page():
 
 
 # ============================================================
-# ADMIN — login / logout (all under /mtawala)
+# ADMIN — login / logout
 # ============================================================
 @app.route("/mtawala", methods=["GET"])
 def mtawala_login_page():
     if not ADMIN_ENABLED:
-        return render_template(
-            "admin_login.html",
-            admin_disabled=True,
-            error=None,
-        )
+        return render_template("admin_login.html",
+                               admin_disabled=True, error=None)
     if _is_admin_logged_in():
         return redirect(url_for("mtawala_dashboard"))
-    return render_template(
-        "admin_login.html",
-        admin_disabled=False,
-        error=None,
-    )
+    return render_template("admin_login.html",
+                           admin_disabled=False, error=None)
 
 
 @app.route("/mtawala/login", methods=["POST"])
@@ -431,11 +490,9 @@ def mtawala_login_submit():
         return redirect(url_for("mtawala_dashboard"))
 
     _login_rate_record(ip)
-    return render_template(
-        "admin_login.html",
-        admin_disabled=False,
-        error="Incorrect username or password.",
-    ), 401
+    return render_template("admin_login.html",
+                           admin_disabled=False,
+                           error="Incorrect username or password."), 401
 
 
 @app.route("/mtawala/logout", methods=["GET", "POST"])
@@ -448,7 +505,7 @@ def mtawala_logout():
 
 
 # ============================================================
-# ADMIN — dashboard & endpoints (protected)
+# ADMIN — dashboard
 # ============================================================
 @app.route("/mtawala/dashboard")
 @requires_admin
@@ -460,11 +517,9 @@ def mtawala_dashboard():
     if days not in (1.0, 7.0, 30.0, 0.0):
         days = 7.0
     stats = analytics.get_stats(days=days)
-    return render_template(
-        "admin.html",
-        stats=stats,
-        admin_user=session.get("admin_user", "admin"),
-    )
+    return render_template("admin.html",
+                           stats=stats,
+                           admin_user=session.get("admin_user", "admin"))
 
 
 @app.route("/mtawala/api/stats")
@@ -543,7 +598,7 @@ def mtawala_analytics_reset():
 
 
 # ============================================================
-# The legacy /admin path is dead — returns 404
+# Legacy /admin path
 # ============================================================
 @app.route("/admin", defaults={"subpath": ""},
            methods=["GET", "POST", "PUT", "DELETE"])
@@ -554,7 +609,7 @@ def _admin_is_gone(subpath):
 
 
 # ============================================================
-# Preview endpoints (public)
+# Preview endpoints
 # ============================================================
 @app.route("/api/preview/start/<tool_id>", methods=["POST"])
 def api_preview_start(tool_id):
@@ -666,7 +721,7 @@ def api_preview_secondary(session_id):
 
 
 # ============================================================
-# Conversion API (public, rate-limited)
+# Conversion API
 # ============================================================
 @app.route("/api/run/<tool_id>", methods=["POST"])
 def api_run(tool_id):
@@ -837,6 +892,7 @@ if __name__ == "__main__":
     print(f"  Admin:    http://127.0.0.1:{port}/mtawala")
     print(f"  Status:   http://127.0.0.1:{port}/status")
     print(f"  Health:   http://127.0.0.1:{port}/health")
+    print(f"  Debug:    http://127.0.0.1:{port}/debug/sheet-test")
     print(f"  Admin pw: {'set' if ADMIN_ENABLED else 'NOT SET (admin disabled)'}")
     print(f"  Rate cap: {RATE_LIMIT_PER_HOUR} / hour / IP")
     print(f"  Sheets:   {'enabled' if os.environ.get('SHEET_ID') else 'disabled'}")

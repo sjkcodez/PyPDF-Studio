@@ -10,9 +10,7 @@ Also requires SHEET_ID = the Google Sheets spreadsheet ID.
 Timestamps:
   • All timestamps written to Sheets use CONTAINER LOCAL TIME
     (datetime.now()), not UTC. Set TZ=Africa/Dar_es_Salaam in
-    docker-compose.yml to control what "local" means.
-  • This makes the Sheets timestamp match the timestamp baked into
-    converted filenames by handlers.py, which also uses datetime.now().
+    docker-compose.yml / Render env vars to control what "local" means.
 
 On startup, the worker hydrates SQLite from Sheets so the admin dashboard
 shows history after a Render cold start (ephemeral disk).
@@ -35,10 +33,10 @@ except ImportError:
 
 
 # ---------- Tunables ----------
-FLUSH_INTERVAL = 10          # seconds between flushes
-BATCH_SIZE = 50              # flush early if this many events are queued
-MAX_QUEUE_SIZE = 5000        # drop oldest if we exceed this (safety cap)
-HYDRATE_ROWS = 500           # how many recent rows to pull into SQLite on boot
+FLUSH_INTERVAL = 10
+BATCH_SIZE = 50
+MAX_QUEUE_SIZE = 5000
+HYDRATE_ROWS = 500
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -127,11 +125,7 @@ def _now() -> str:
 
 
 def _parse_ts(s: str):
-    """Parse 'YYYY-MM-DD HH:MM:SS' (container local time) into epoch seconds.
-
-    The naive datetime is attached to the system's local timezone, so
-    .timestamp() converts it correctly to an absolute epoch value.
-    """
+    """Parse 'YYYY-MM-DD HH:MM:SS' (container local time) into epoch seconds."""
     try:
         dt = datetime.strptime(str(s).strip(), "%Y-%m-%d %H:%M:%S")
         return dt.astimezone().timestamp()
@@ -158,6 +152,7 @@ def _flush_batch(events: list[tuple[str, list]]) -> bool:
                 _log(f"tab '{tab}' not found — skipping {len(rows)}")
                 continue
             ws.append_rows(rows, value_input_option="USER_ENTERED")
+            _log(f"flushed {len(rows)} rows to '{tab}'")
         return True
     except Exception as e:
         _log(f"flush failed: {e}")
@@ -301,7 +296,6 @@ def _worker():
     _log("worker started")
     _init_client()
 
-    # One-time hydration on startup
     try:
         _hydrate_from_sheets()
     except Exception as e:
@@ -336,8 +330,10 @@ def _worker():
 
 def _enqueue(tab: str, row: list):
     if _queue.qsize() >= MAX_QUEUE_SIZE:
+        _log(f"queue full, dropping event for {tab}")
         return
     _queue.put((tab, row))
+    _log(f"enqueued {tab}: queue size = {_queue.qsize()}")
 
 
 # ============================================================
