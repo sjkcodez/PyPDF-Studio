@@ -16,8 +16,6 @@ Persistence:
 Timestamps:
   • Stored as Unix epoch seconds (time.time()) — timezone-agnostic.
   • Displayed via datetime.fromtimestamp() — shows container local time.
-  • Requires TZ=Africa/Dar_es_Salaam in docker-compose.yml + tzdata
-    installed in the Docker image for local-time display to work.
 """
 import csv
 import io
@@ -155,6 +153,9 @@ def _detect_browser(ua: str) -> str:
 # Recording
 # ============================================================
 def record_visit(ip: str, ua: str, path: str, referrer: str, session_id: str):
+    # ---- DIAGNOSTIC: function was entered ----
+    print(f"[analytics] record_visit called: path={path}", flush=True)
+
     # --- Local SQLite write (fast) ---
     try:
         with _LOCK:
@@ -174,10 +175,11 @@ def record_visit(ip: str, ua: str, path: str, referrer: str, session_id: str):
                 conn.commit()
             finally:
                 conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[analytics] SQLite visit insert failed: {e}", flush=True)
 
     # --- Mirror to Google Sheets (async, batched) ---
+    print("[analytics] mirroring visit to sheet_logger...", flush=True)
     try:
         sheet_logger.log_visit(
             ip=ip or "",
@@ -187,8 +189,9 @@ def record_visit(ip: str, ua: str, path: str, referrer: str, session_id: str):
             browser=_detect_browser(ua),
             session_id=session_id or "",
         )
-    except Exception:
-        pass
+        print("[analytics] visit mirror OK", flush=True)
+    except Exception as e:
+        print(f"[analytics] visit mirror FAILED: {e}", flush=True)
 
 
 def record_conversion(
@@ -203,6 +206,10 @@ def record_conversion(
     success: bool,
     error: str = "",
 ):
+    # ---- DIAGNOSTIC ----
+    print(f"[analytics] record_conversion called: {tool_id} "
+          f"success={success}", flush=True)
+
     # --- Local SQLite write ---
     try:
         with _LOCK:
@@ -225,10 +232,11 @@ def record_conversion(
                 conn.commit()
             finally:
                 conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[analytics] SQLite conversion insert failed: {e}", flush=True)
 
     # --- Mirror to Google Sheets ---
+    print("[analytics] mirroring conversion to sheet_logger...", flush=True)
     try:
         sheet_logger.log_conversion(
             tool_id=tool_id or "",
@@ -241,11 +249,15 @@ def record_conversion(
             error=error or "",
             session_id=session_id or "",
         )
-    except Exception:
-        pass
+        print("[analytics] conversion mirror OK", flush=True)
+    except Exception as e:
+        print(f"[analytics] conversion mirror FAILED: {e}", flush=True)
 
 
 def record_download(filename: str, ip: str, session_id: str):
+    # ---- DIAGNOSTIC ----
+    print(f"[analytics] record_download called: {filename}", flush=True)
+
     # --- Local SQLite write ---
     try:
         with _LOCK:
@@ -259,18 +271,20 @@ def record_download(filename: str, ip: str, session_id: str):
                 conn.commit()
             finally:
                 conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[analytics] SQLite download insert failed: {e}", flush=True)
 
     # --- Mirror to Google Sheets ---
+    print("[analytics] mirroring download to sheet_logger...", flush=True)
     try:
         sheet_logger.log_download(
             filename=filename or "",
             ip=ip or "",
             session_id=session_id or "",
         )
-    except Exception:
-        pass
+        print("[analytics] download mirror OK", flush=True)
+    except Exception as e:
+        print(f"[analytics] download mirror FAILED: {e}", flush=True)
 
 
 # ============================================================
@@ -299,7 +313,6 @@ def get_stats(days: float = 7.0) -> dict:
 
     conn = _connect()
     try:
-        # ---- KPIs ----
         out["totals"]["visits"] = conn.execute(
             "SELECT COUNT(*) FROM visits WHERE ts >= ?", (since,)
         ).fetchone()[0]
@@ -323,7 +336,6 @@ def get_stats(days: float = 7.0) -> dict:
             "SELECT COUNT(*) FROM downloads WHERE ts >= ?", (since,)
         ).fetchone()[0]
 
-        # ---- Top tools ----
         rows = conn.execute(
             """SELECT tool_id,
                       COUNT(*)                                  AS uses,
@@ -346,16 +358,13 @@ def get_stats(days: float = 7.0) -> dict:
             for r in rows
         ]
 
-        # ---- Devices / Browsers / OS ----
         out["devices"] = _group_count(conn, "visits", "device", since)
         out["browsers"] = _group_count(conn, "visits", "browser", since)
         out["os"] = _group_count(conn, "visits", "os", since)
 
-        # ---- Daily visits ----
         daily_n = int(min(max(days, 1), 14))
         out["daily_visits"] = _daily_counts(conn, "visits", daily_n)
 
-        # ---- Recent activity ----
         rows = conn.execute(
             """SELECT ts, tool_id, input_ext, output_ext, duration_ms,
                       success, input_size
@@ -411,7 +420,6 @@ def _group_count(conn, table: str, column: str, since: float):
 
 
 def _daily_counts(conn, table: str, days: int):
-    """Return per-day counts for the last `days` days (local midnight)."""
     out = []
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     for i in range(days - 1, -1, -1):
@@ -430,11 +438,7 @@ def _daily_counts(conn, table: str, days: int):
     return out
 
 
-# ============================================================
-# CSV export
-# ============================================================
 def export_csv() -> str:
-    """Return all analytics data as a single multi-section CSV string."""
     buf = io.StringIO()
     w = csv.writer(buf)
     conn = _connect()
@@ -452,11 +456,7 @@ def export_csv() -> str:
     return buf.getvalue()
 
 
-# ============================================================
-# Reset
-# ============================================================
 def reset_all():
-    """Delete all analytics data and reset auto-increment counters."""
     with _LOCK:
         conn = _connect()
         try:
