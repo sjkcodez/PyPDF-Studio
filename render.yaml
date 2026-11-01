@@ -11,7 +11,7 @@ services:
     envVars:
       # ---- Admin / security ----
       - key: PYPDF_ADMIN_USER
-        value: admin
+        value: Arduino
       - key: PYPDF_ADMIN_PASS
         sync: false
       - key: PYPDF_SECRET_KEY

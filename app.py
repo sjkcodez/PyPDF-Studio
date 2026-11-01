@@ -287,6 +287,7 @@ def _inject_globals():
 # ============================================================
 # Analytics hooks
 # ============================================================
+'''
 @app.before_request
 def _analytics_before():
     skip_prefixes = ("/static/", "/mtawala", "/admin", "/health",
@@ -312,7 +313,51 @@ def _analytics_before():
             )
         except Exception:
             pass
+'''
 
+@app.before_request
+def _analytics_before():
+    # 1. Skip standard system paths
+    skip_prefixes = ("/static/", "/mtawala", "/admin", "/health", "/debug/", "/favicon.ico", "/robots.txt")
+    if request.path.startswith(skip_prefixes):
+        return
+
+    # 2. Skip common scanner paths (the ones you just saw in the logs)
+    scanner_paths = (
+        "/.env", "/.git", "/wp-", "/xmlrpc.php", "/actuator", 
+        "/secrets", "/credentials", "/config", "/v1/", "/ollama"
+    )
+    if any(path in request.path.lower() for path in scanner_paths):
+        return
+
+    # 3. Skip known bot User-Agents
+    ua = request.user_agent.string.lower()
+    bot_markers = (
+        "bot", "crawler", "spider", "scraper", "scan", 
+        "python-requests", "curl", "wget", "go-http-client"
+    )
+    if any(marker in ua for marker in bot_markers):
+        return
+
+    # --- Only record REAL human visits below this line ---
+    sid = request.cookies.get("pypdf_sid", "")
+    is_new = not sid
+    if is_new:
+        sid = uuid.uuid4().hex[:16]
+    g.session_id = sid
+    g.is_new_session = is_new
+
+    if not request.path.startswith("/api/"):
+        try:
+            analytics.record_visit(
+                ip=_client_ip(),
+                ua=request.user_agent.string or "",
+                path=request.path,
+                referrer=request.referrer or "",
+                session_id=sid,
+            )
+        except Exception:
+            pass
 
 @app.after_request
 def _analytics_after(response):
